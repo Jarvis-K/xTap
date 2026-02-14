@@ -11,7 +11,7 @@
 <p align="center">
   <a href="#installation">Installation</a> &middot;
   <a href="#how-it-works">How It Works</a> &middot;
-  <a href="#staying-under-the-radar">Stealth</a> &middot;
+  <a href="#is-this-safe-to-use">Stealth</a> &middot;
   <a href="#output-format">Output Format</a> &middot;
   <a href="#configuration">Configuration</a> &middot;
   <a href="LICENSE">License</a>
@@ -33,6 +33,8 @@ xTap is a Chrome extension that silently intercepts the GraphQL API responses X/
 - **Structured output** — each tweet saved as a clean JSON object with author, metrics, media, and more
 - **Pause / resume** — click the extension icon to toggle capture on the fly
 - **Live counter** — badge on the extension icon shows tweets captured this session
+- **Multi-tab aware** — multiple X tabs feed into the same service worker with shared deduplication
+- **Debug logging** — optional toggle to write timestamped service worker logs to a date-rotated file
 - **Cross-platform** — works on macOS, Linux, and Windows
 
 ## How It Works
@@ -73,18 +75,28 @@ xTap is a Chrome extension that silently intercepts the GraphQL API responses X/
 3. The service worker parses, normalizes, deduplicates, and batches tweets
 4. Batches are sent over Chrome native messaging to a Python host that appends each tweet as a JSON line to a daily file (`tweets-2026-02-14.jsonl`)
 
-## Staying Under the Radar
+## Is This Safe to Use?
 
-xTap is designed to be passive and hard to distinguish from normal browser activity:
+X is [rolling out stricter detection for automation and bots](https://x.com/nikitabier). The key line: *"If a human is not tapping on the screen, the account and all associated accounts will likely be suspended."*
+
+**xTap is not a bot.** It doesn't post, like, follow, scroll, or make any API calls on your behalf. It sits in the background and reads the responses X already sent to your browser while *you* browse normally. From X's server-side perspective, your account looks identical to any other user — because you *are* a normal user. There is no extra traffic to detect.
+
+The risk of automation enforcement applies to tools that *act* as you (auto-liking, auto-following, automated scrolling, headless browsers). xTap does none of that. It's the equivalent of keeping DevTools open and saving the Network tab — just automated into structured JSONL.
+
+### Stealth Measures
+
+Even though passive interception is inherently low-risk, xTap avoids leaving unnecessary traces:
 
 - **No extra network requests** — only reads responses the browser already received; nothing to spot in a network log
 - **Native-looking API patches** — `fetch` and `XMLHttpRequest.prototype.open` are patched with `toString()` overrides that return `[native code]`, passing the most common runtime integrity checks
 - **No expando properties** — XHR URL tracking uses a `WeakMap` instead of attaching properties to the XHR instance, which would be trivially detectable
 - **Random event channel** — the MAIN↔ISOLATED world bridge uses a `CustomEvent` with a per-page-load random name; the `<meta>` beacon that communicates the name is removed immediately after the bridge reads it
+- **Zero DOM footprint** — no injected UI, no page modifications; everything lives in the popup and service worker
 - **Zero console output in page context** — all logging happens in the service worker and parser, which run outside the page's JavaScript environment
 - **Minimal permissions** — only `storage` and `nativeMessaging`; no `webRequest`, no host permissions beyond `x.com` / `twitter.com`
+- **Jittered flush timing** — batches are flushed on a randomized interval to avoid a clockwork-regular pattern
 
-These measures don't make detection impossible — a determined page script could still compare prototype references or probe for patched behavior — but they avoid the low-hanging signals that fingerprinting scripts typically check.
+These measures don't make detection impossible — a determined page script could still compare prototype references or probe for patched behavior — but they avoid the low-hanging signals that fingerprinting scripts typically check. More importantly, there's nothing to detect server-side because xTap generates zero network activity of its own.
 
 ## Installation
 
@@ -145,6 +157,7 @@ export XTAP_OUTPUT_DIR="$HOME/Documents/xtap-data"
 |---|---|---|
 | Popup "Output directory" | *(empty — uses default)* | Overrides the output path per-session |
 | `XTAP_OUTPUT_DIR` env var | `~/Downloads/xtap` | Fallback when no popup setting is configured |
+| Debug logging toggle | Off | Writes service worker logs to `debug-YYYY-MM-DD.log` in the output directory |
 
 ## Output Format
 
