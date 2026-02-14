@@ -235,6 +235,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 restoreState().then(() => {
   updateBadge();
   connectNative();
-  flushTimer = setInterval(scheduledFlush, FLUSH_INTERVAL_MS);
+  function scheduleNextFlush() {
+    const jitter = Math.random() * FLUSH_INTERVAL_MS * 0.5;
+    flushTimer = setTimeout(() => { scheduledFlush(); scheduleNextFlush(); }, FLUSH_INTERVAL_MS + jitter);
+  }
+  scheduleNextFlush();
   console.log('[xTap] Service worker started');
 });
