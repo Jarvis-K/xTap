@@ -159,6 +159,8 @@ export XTAP_OUTPUT_DIR="$HOME/Documents/xtap-data"
 | `XTAP_OUTPUT_DIR` env var | `~/Downloads/xtap` | Fallback when no popup setting is configured |
 | Debug logging toggle | Off | Writes service worker logs to `debug-YYYY-MM-DD.log` in the output directory |
 
+> **macOS note:** The native host runs as a standalone `python3` process, which does not inherit Chrome's Full Disk Access. Paths inside iCloud Drive (`~/Library/Mobile Documents/...`) will fail with a permission error. Use a local path like `~/Downloads/xtap` instead.
+
 ## Output Format
 
 Output is written to daily files (`tweets-YYYY-MM-DD.jsonl`). Each line is a self-contained JSON object:
