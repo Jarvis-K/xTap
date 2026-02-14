@@ -153,6 +153,7 @@ Each line in `tweets.jsonl` is a self-contained JSON object:
 ```jsonc
 {
   "id": "1234567890",
+  "url": "https://x.com/handle/status/1234567890",
   "created_at": "2024-01-01T00:00:00.000Z",
   "author": {
     "id": "987654321",
