@@ -1,19 +1,16 @@
 // xTap — MAIN world content script
-// Monkey-patches window.fetch and XMLHttpRequest to intercept X/Twitter GraphQL API responses.
+// Intercepts X/Twitter GraphQL API responses via fetch and XMLHttpRequest.
 // Dispatches a CustomEvent to relay data to the ISOLATED world bridge script.
 (function () {
   'use strict';
 
   const GRAPHQL_PATTERN = '/i/api/graphql/';
-  // Random event name to avoid detection via document event listeners
   const EVENT_NAME = '_' + Math.random().toString(36).slice(2);
-  // Expose the event name to the ISOLATED world via a DOM attribute on a hidden element
   const beacon = document.createElement('meta');
   beacon.name = '__cfg';
   beacon.content = EVENT_NAME;
   (document.head || document.documentElement).appendChild(beacon);
 
-  // Use a WeakMap instead of expando property to avoid detection via Object.keys(xhr)
   const xhrUrls = new WeakMap();
 
   function extractEndpoint(url) {
@@ -47,37 +44,30 @@
     } catch (_) {}
     return response;
   };
-  // Make toString() return native-looking string to evade detection
   patchedFetch.toString = () => 'function fetch() { [native code] }';
   Object.defineProperty(patchedFetch, 'name', { value: 'fetch' });
   window.fetch = patchedFetch;
 
   // --- Patch XMLHttpRequest ---
+  // Only patch open() to attach a load listener for GraphQL URLs.
+  // send() is NOT patched, so non-GraphQL XHR calls have a clean stack trace.
   const nativeOpen = XMLHttpRequest.prototype.open;
-  const nativeSend = XMLHttpRequest.prototype.send;
   const nativeOpenStr = nativeOpen.toString();
-  const nativeSendStr = nativeSend.toString();
 
   const patchedOpen = function open(method, url, ...rest) {
-    xhrUrls.set(this, (typeof url === 'string') ? url : url?.toString());
+    const urlStr = (typeof url === 'string') ? url : url?.toString();
+    if (urlStr && urlStr.includes(GRAPHQL_PATTERN)) {
+      xhrUrls.set(this, urlStr);
+      this.addEventListener('load', function () {
+        try {
+          const data = JSON.parse(this.responseText);
+          dispatchData(xhrUrls.get(this), data);
+        } catch (_) {}
+      });
+    }
     return nativeOpen.call(this, method, url, ...rest);
   };
   patchedOpen.toString = () => nativeOpenStr;
 
-  const patchedSend = function send(...args) {
-    const url = xhrUrls.get(this);
-    if (url && url.includes(GRAPHQL_PATTERN)) {
-      this.addEventListener('load', function () {
-        try {
-          const data = JSON.parse(this.responseText);
-          dispatchData(url, data);
-        } catch (_) {}
-      });
-    }
-    return nativeSend.apply(this, args);
-  };
-  patchedSend.toString = () => nativeSendStr;
-
   XMLHttpRequest.prototype.open = patchedOpen;
-  XMLHttpRequest.prototype.send = patchedSend;
 })();

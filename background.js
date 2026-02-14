@@ -126,7 +126,8 @@ const IGNORED_ENDPOINTS = new Set([
   'XChatDmSettingsQuery', 'useTotalAdCampaignsForUserQuery', 'useStoryTopicQuery',
   'useSubscriptionsPaymentFailureQuery', 'PinnedTimelines', 'ExploreSidebar',
   'SidebarUserRecommendations', 'useFetchProductSubscriptionsQuery',
-  'TweetResultByRestId',
+  'TweetResultByRestId', 'ExplorePage', 'UserByScreenName',
+  'ProfileSpotlightsQuery', 'useFetchProfileSections_canViewExpandedProfileQuery',
 ]);
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
