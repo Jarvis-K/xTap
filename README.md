@@ -159,7 +159,7 @@ export XTAP_OUTPUT_DIR="$HOME/Documents/xtap-data"
 | `XTAP_OUTPUT_DIR` env var | `~/Downloads/xtap` | Fallback when no popup setting is configured |
 | Debug logging toggle | Off | Writes service worker logs to `debug-YYYY-MM-DD.log` in the output directory |
 
-> **macOS note:** The native host runs as a standalone `python3` process, which does not inherit Chrome's Full Disk Access. Paths inside iCloud Drive (`~/Library/Mobile Documents/...`) will fail with a permission error. Use a local path like `~/Downloads/xtap` instead.
+> **macOS note:** The native host runs as a standalone `python3` process, which does not inherit Chrome's TCC permissions. Protected paths — including iCloud Drive, `~/Documents`, `~/Desktop`, and others — will fail with a permission error. `~/Downloads` is the safe default as it's writable without TCC approval.
 
 ## Output Format
 
