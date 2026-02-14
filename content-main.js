@@ -5,7 +5,16 @@
   'use strict';
 
   const GRAPHQL_PATTERN = '/i/api/graphql/';
-  const EVENT_NAME = '__xtap_graphql';
+  // Random event name to avoid detection via document event listeners
+  const EVENT_NAME = '_' + Math.random().toString(36).slice(2);
+  // Expose the event name to the ISOLATED world via a DOM attribute on a hidden element
+  const beacon = document.createElement('meta');
+  beacon.name = '__cfg';
+  beacon.content = EVENT_NAME;
+  (document.head || document.documentElement).appendChild(beacon);
+
+  // Use a WeakMap instead of expando property to avoid detection via Object.keys(xhr)
+  const xhrUrls = new WeakMap();
 
   function extractEndpoint(url) {
     try {
@@ -25,9 +34,9 @@
     }));
   }
 
-  // --- Patch fetch (in case some calls use it) ---
+  // --- Patch fetch ---
   const originalFetch = window.fetch;
-  window.fetch = async function (...args) {
+  const patchedFetch = async function fetch(...args) {
     const response = await originalFetch.apply(this, args);
     try {
       const url = (typeof args[0] === 'string') ? args[0] : args[0]?.url;
@@ -38,27 +47,37 @@
     } catch (_) {}
     return response;
   };
+  // Make toString() return native-looking string to evade detection
+  patchedFetch.toString = () => 'function fetch() { [native code] }';
+  Object.defineProperty(patchedFetch, 'name', { value: 'fetch' });
+  window.fetch = patchedFetch;
 
   // --- Patch XMLHttpRequest ---
-  const XHROpen = XMLHttpRequest.prototype.open;
-  const XHRSend = XMLHttpRequest.prototype.send;
+  const nativeOpen = XMLHttpRequest.prototype.open;
+  const nativeSend = XMLHttpRequest.prototype.send;
+  const nativeOpenStr = nativeOpen.toString();
+  const nativeSendStr = nativeSend.toString();
 
-  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-    this._xtapUrl = (typeof url === 'string') ? url : url?.toString();
-    return XHROpen.call(this, method, url, ...rest);
+  const patchedOpen = function open(method, url, ...rest) {
+    xhrUrls.set(this, (typeof url === 'string') ? url : url?.toString());
+    return nativeOpen.call(this, method, url, ...rest);
   };
+  patchedOpen.toString = () => nativeOpenStr;
 
-  XMLHttpRequest.prototype.send = function (...args) {
-    if (this._xtapUrl && this._xtapUrl.includes(GRAPHQL_PATTERN)) {
+  const patchedSend = function send(...args) {
+    const url = xhrUrls.get(this);
+    if (url && url.includes(GRAPHQL_PATTERN)) {
       this.addEventListener('load', function () {
         try {
           const data = JSON.parse(this.responseText);
-          dispatchData(this._xtapUrl, data);
+          dispatchData(url, data);
         } catch (_) {}
       });
     }
-    return XHRSend.apply(this, args);
+    return nativeSend.apply(this, args);
   };
+  patchedSend.toString = () => nativeSendStr;
 
-  console.log('[xTap] Content script loaded — fetch + XHR patched');
+  XMLHttpRequest.prototype.open = patchedOpen;
+  XMLHttpRequest.prototype.send = patchedSend;
 })();

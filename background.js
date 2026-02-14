@@ -97,6 +97,11 @@ function enqueueTweets(tweets) {
     seenIds = new Set(arr.slice(arr.length - MAX_SEEN_IDS));
   }
 
+  const dupeCount = tweets.length - newCount;
+  if (dupeCount > 0) {
+    console.log(`[xTap] Dedup: ${newCount} new, ${dupeCount} duplicates skipped (seenIds: ${seenIds.size})`);
+  }
+
   sessionCount += newCount;
   allTimeCount += newCount;
   updateBadge();
@@ -115,18 +120,33 @@ function updateBadge() {
 
 // --- Message handling ---
 
+// Endpoints that use /i/api/graphql/ but never contain tweets
+const IGNORED_ENDPOINTS = new Set([
+  'DataSaverMode', 'getAltTextPromptPreference', 'useDirectCallSetupQuery',
+  'XChatDmSettingsQuery', 'useTotalAdCampaignsForUserQuery', 'useStoryTopicQuery',
+  'useSubscriptionsPaymentFailureQuery', 'PinnedTimelines', 'ExploreSidebar',
+  'SidebarUserRecommendations', 'useFetchProductSubscriptionsQuery',
+  'TweetResultByRestId',
+]);
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'GRAPHQL_RESPONSE') {
     if (!captureEnabled) return;
+    if (IGNORED_ENDPOINTS.has(msg.endpoint)) return;
     try {
       const tweets = extractTweets(msg.endpoint, msg.data);
       for (const t of tweets) t.source_endpoint = msg.endpoint;
       if (tweets.length > 0) {
-        console.log(`[xTap] ${msg.endpoint}: ${tweets.length} tweets`);
+        const missingAuthor = tweets.filter(t => !t.author?.username).length;
+        const missingText = tweets.filter(t => !t.text).length;
+        let warn = '';
+        if (missingAuthor > 0) warn += ` | ${missingAuthor} missing username`;
+        if (missingText > 0) warn += ` | ${missingText} missing text`;
+        console.log(`[xTap] ${msg.endpoint}: ${tweets.length} tweets${warn}`);
         enqueueTweets(tweets);
       }
     } catch (e) {
-      console.error(`[xTap] Parse error for ${msg.endpoint}:`, e);
+      console.error(`[xTap] Parse error for ${msg.endpoint}:`, e, '| data keys:', Object.keys(msg.data || {}).join(', '));
     }
     return;
   }

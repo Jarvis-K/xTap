@@ -4,19 +4,37 @@
 (function () {
   'use strict';
 
-  const EVENT_NAME = '__xtap_graphql';
+  // The MAIN world script creates a <meta name="__cfg"> with the random event name.
+  // We poll for it since the MAIN script may not have run yet.
+  function start(eventName) {
+    document.addEventListener(eventName, (e) => {
+      try {
+        const payload = JSON.parse(e.detail);
+        chrome.runtime.sendMessage({
+          type: 'GRAPHQL_RESPONSE',
+          url: payload.url,
+          endpoint: payload.endpoint,
+          data: payload.data
+        });
+      } catch (_) {}
+    });
+  }
 
-  document.addEventListener(EVENT_NAME, (e) => {
-    try {
-      const payload = JSON.parse(e.detail);
-      chrome.runtime.sendMessage({
-        type: 'GRAPHQL_RESPONSE',
-        url: payload.url,
-        endpoint: payload.endpoint,
-        data: payload.data
-      });
-    } catch (_) {
-      // Silently ignore parse errors
+  function findBeacon() {
+    const meta = document.querySelector('meta[name="__cfg"]');
+    if (meta) {
+      const eventName = meta.content;
+      meta.remove(); // Clean up — no trace left in DOM
+      start(eventName);
+    } else {
+      // MAIN world script hasn't run yet, retry
+      requestAnimationFrame(findBeacon);
     }
-  });
+  }
+
+  if (document.documentElement) {
+    findBeacon();
+  } else {
+    document.addEventListener('DOMContentLoaded', findBeacon, { once: true });
+  }
 })();
