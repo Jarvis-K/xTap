@@ -1,40 +1,118 @@
-# xTap
+<p align="center">
+  <img src="icons/icon128.png" alt="xTap logo" width="96" />
+</p>
 
-Passive Chrome extension that captures tweets from X/Twitter as you browse. Intercepts GraphQL API responses the browser already receives and saves them as JSONL via a native messaging host.
+<h1 align="center">xTap</h1>
 
-## Setup
+<p align="center">
+  <strong>Passively capture tweets as you browse X/Twitter</strong>
+</p>
+
+<p align="center">
+  <a href="#installation">Installation</a> &middot;
+  <a href="#how-it-works">How It Works</a> &middot;
+  <a href="#output-format">Output Format</a> &middot;
+  <a href="#configuration">Configuration</a> &middot;
+  <a href="LICENSE">License</a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue" alt="Platform" />
+  <img src="https://img.shields.io/badge/chrome-MV3-green" alt="Chrome MV3" />
+  <img src="https://img.shields.io/badge/license-MIT-yellow" alt="MIT License" />
+</p>
+
+---
+
+xTap is a Chrome extension that silently intercepts the GraphQL API responses X/Twitter already sends to your browser and saves every tweet you encounter as structured JSONL. No scraping, no extra requests — just a tap on the data already flowing through.
+
+## Features
+
+- **Zero footprint** — no additional network requests; captures what Chrome already receives
+- **Structured output** — each tweet saved as a clean JSON object with author, metrics, media, and more
+- **Pause / resume** — click the extension icon to toggle capture on the fly
+- **Live counter** — badge on the extension icon shows tweets captured this session
+- **Cross-platform** — works on macOS, Linux, and Windows
+
+## How It Works
+
+```
+X/Twitter  ──GraphQL──▶  Chrome  ──intercept──▶  xTap Extension
+                                                       │
+                                              native messaging
+                                                       │
+                                                       ▼
+                                               xtap_host.py
+                                                       │
+                                                       ▼
+                                              tweets.jsonl
+```
+
+1. A content script patches `fetch` and `XMLHttpRequest` in the page context to observe GraphQL responses
+2. Captured payloads are relayed through an isolated-world bridge to the service worker
+3. The service worker parses tweet objects, deduplicates them, and batches them to a native messaging host
+4. A small Python host appends each tweet as a JSON line to disk
+
+## Installation
+
+### Requirements
+
+| | Requirement |
+|---|---|
+| **Browser** | Google Chrome |
+| **Runtime** | Python 3 |
+| **OS** | macOS, Linux, or Windows |
 
 ### 1. Load the extension
 
 1. Open `chrome://extensions`
 2. Enable **Developer mode** (top right)
 3. Click **Load unpacked** and select the `xtap/` directory
-4. Copy the extension ID shown on the card
+4. Copy the **extension ID** shown on the card
 
 ### 2. Install the native messaging host
+
+<details>
+<summary><strong>macOS / Linux</strong></summary>
 
 ```bash
 cd native-host
 ./install.sh <your-extension-id>
 ```
 
-### 3. Configure output directory (optional)
+</details>
 
-By default tweets are saved to `~/Downloads/xtap/tweets.jsonl`. To change this, set the `XTAP_OUTPUT_DIR` environment variable before launching Chrome:
+<details>
+<summary><strong>Windows (PowerShell)</strong></summary>
+
+```powershell
+cd native-host
+.\install.ps1 <your-extension-id>
+```
+
+</details>
+
+### 3. Browse X
+
+Open [x.com](https://x.com) and browse normally. The badge counter on the extension icon shows how many tweets have been captured this session. Click the icon to see stats and pause/resume capture.
+
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `XTAP_OUTPUT_DIR` | `~/Downloads/xtap` | Directory where `tweets.jsonl` is written |
+
+Set it before launching Chrome:
 
 ```bash
 export XTAP_OUTPUT_DIR="$HOME/Documents/xtap-data"
 ```
 
-### 4. Browse X
+## Output Format
 
-Open [x.com](https://x.com) and browse normally. The badge counter on the extension icon shows how many tweets have been captured this session. Click the extension icon to see stats and pause/resume capture.
+Each line in `tweets.jsonl` is a self-contained JSON object:
 
-## Output format
-
-Each line in `tweets.jsonl` is a JSON object with this schema:
-
-```json
+```jsonc
 {
   "id": "1234567890",
   "created_at": "Mon Jan 01 00:00:00 +0000 2024",
@@ -65,13 +143,29 @@ Each line in `tweets.jsonl` is a JSON object with this schema:
   "conversation_id": "1234567890",
   "is_retweet": false,
   "retweeted_tweet_id": null,
-  "source_endpoint": "HomeTimeline",
+  "source_endpoint": "HomeTimeline",    // which GraphQL endpoint
   "captured_at": "2024-01-01T00:00:00.000Z"
 }
 ```
 
-## Requirements
+## Project Structure
 
-- macOS
-- Google Chrome
-- Python 3
+```
+xTap/
+├── manifest.json          # Chrome MV3 extension manifest
+├── background.js          # Service worker — parsing, dedup, native messaging
+├── content-main.js        # MAIN world — patches fetch/XHR, emits events
+├── content-bridge.js      # ISOLATED world — relays events to service worker
+├── popup.html/js/css      # Extension popup UI
+├── icons/                 # Extension icons
+├── lib/                   # Shared utilities
+└── native-host/
+    ├── xtap_host.py       # Native messaging host (Python)
+    ├── install.sh         # Installer for macOS / Linux
+    ├── install.ps1        # Installer for Windows
+    └── xtap_host.bat      # Windows Python wrapper
+```
+
+## License
+
+[MIT](LICENSE) — use it however you like.

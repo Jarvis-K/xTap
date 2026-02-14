@@ -1,5 +1,5 @@
 #!/bin/bash
-# xTap — macOS installer for the native messaging host.
+# xTap — installer for the native messaging host (macOS / Linux).
 # Usage: ./install.sh <chrome-extension-id>
 
 set -euo pipefail
@@ -14,7 +14,20 @@ EXT_ID="$1"
 HOST_NAME="com.xtap.host"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOST_PATH="${SCRIPT_DIR}/xtap_host.py"
-TARGET_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
+
+OS="$(uname)"
+case "$OS" in
+  Darwin)
+    TARGET_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
+    ;;
+  Linux)
+    TARGET_DIR="$HOME/.config/google-chrome/NativeMessagingHosts"
+    ;;
+  *)
+    echo "Error: Unsupported OS '$OS'. Use install.ps1 on Windows."
+    exit 1
+    ;;
+esac
 MANIFEST_PATH="${TARGET_DIR}/${HOST_NAME}.json"
 
 # Verify python3
