@@ -262,6 +262,19 @@ xTap/
     └── xtap_host.bat          # Windows Python wrapper
 ```
 
+## Development
+
+After modifying extension files (`background.js`, `lib/`, `content-*.js`, `popup.*`), reload the extension at `chrome://extensions` and hard-reload any open X tabs.
+
+After modifying Python host files (`xtap_core.py`, `xtap_host.py`, `xtap_daemon.py`), the native host picks up changes on next Chrome restart. On **macOS**, if you're using the HTTP daemon, restart it to pick up changes immediately:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.xtap.daemon   # restart
+launchctl bootout gui/$(id -u)/com.xtap.daemon         # stop
+launchctl print gui/$(id -u)/com.xtap.daemon           # status
+tail -f ~/.xtap/daemon-stderr.log                       # logs
+```
+
 ## License
 
 [MIT](LICENSE) — use it however you like.
