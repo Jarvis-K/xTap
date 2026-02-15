@@ -131,6 +131,10 @@ button.paused {
   color: #fff;
 }
 
+.save-btn.error {
+  background: #b91c1c;
+}
+
 .toggle-row {
   display: flex;
   align-items: center;

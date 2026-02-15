@@ -47,9 +47,20 @@ toggleBtn.addEventListener('click', () => {
 
 saveDirBtn.addEventListener('click', () => {
   const dir = outputDirInput.value.trim();
-  chrome.runtime.sendMessage({ type: 'SET_OUTPUT_DIR', outputDir: dir }, () => {
-    saveDirBtn.textContent = 'Saved!';
-    setTimeout(() => { saveDirBtn.textContent = 'Save'; }, 1500);
+  saveDirBtn.textContent = '...';
+  saveDirBtn.disabled = true;
+  chrome.runtime.sendMessage({ type: 'SET_OUTPUT_DIR', outputDir: dir }, (resp) => {
+    saveDirBtn.disabled = false;
+    if (resp?.error) {
+      saveDirBtn.textContent = 'Error';
+      saveDirBtn.classList.add('error');
+      outputDirInput.title = resp.error;
+    } else {
+      saveDirBtn.textContent = 'Saved!';
+      saveDirBtn.classList.remove('error');
+      outputDirInput.title = '';
+    }
+    setTimeout(() => { saveDirBtn.textContent = 'Save'; }, 2000);
   });
 });
 
