@@ -7,7 +7,7 @@ import signal
 import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-from xtap_core import DEFAULT_OUTPUT_DIR, load_seen_ids, resolve_output_dir, write_tweets, write_log, test_path
+from xtap_core import DEFAULT_OUTPUT_DIR, load_seen_ids, resolve_output_dir, write_tweets, write_log, write_dump, test_path
 
 VERSION = '0.1.0'
 BIND_HOST = '127.0.0.1'
@@ -77,6 +77,8 @@ class DaemonHandler(BaseHTTPRequestHandler):
             self._handle_tweets(body)
         elif self.path == '/log':
             self._handle_log(body)
+        elif self.path == '/dump':
+            self._handle_dump(body)
         elif self.path == '/test-path':
             self._handle_test_path(body)
         else:
@@ -99,6 +101,17 @@ class DaemonHandler(BaseHTTPRequestHandler):
             lines = body.get('lines', [])
             logged = write_log(lines, out_dir)
             self._send_json({'ok': True, 'logged': logged})
+        except Exception as e:
+            self._send_json({'ok': False, 'error': str(e)}, 500)
+
+    def _handle_dump(self, body):
+        try:
+            msg_dir = body.get('outputDir', '').strip()
+            out_dir = resolve_output_dir(msg_dir, DEFAULT_OUTPUT_DIR, _seen_ids, _custom_dirs)
+            filename = body.get('filename', 'dump.json')
+            content = body.get('content', '')
+            path = write_dump(filename, content, out_dir)
+            self._send_json({'ok': True, 'path': path})
         except Exception as e:
             self._send_json({'ok': False, 'error': str(e)}, 500)
 

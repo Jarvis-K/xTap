@@ -6,7 +6,7 @@ import os
 import struct
 import sys
 
-from xtap_core import DEFAULT_OUTPUT_DIR, load_seen_ids, resolve_output_dir, write_tweets, write_log, test_path
+from xtap_core import DEFAULT_OUTPUT_DIR, load_seen_ids, resolve_output_dir, write_tweets, write_log, write_dump, test_path
 
 XTAP_PORT = 17381
 XTAP_DIR = os.path.expanduser('~/.xtap')
@@ -65,6 +65,14 @@ def _handle_message(msg, default_dir, seen_ids, custom_dirs):
     if msg.get('type') == 'TEST_PATH':
         test_path(out_dir)
         send_message({'ok': True, 'type': 'TEST_PATH'})
+        return
+
+    # Handle dump (discovery mode)
+    if msg.get('type') == 'DUMP':
+        filename = msg.get('filename', 'dump.json')
+        content = msg.get('content', '')
+        path = write_dump(filename, content, out_dir)
+        send_message({'ok': True, 'path': path})
         return
 
     # Handle log messages

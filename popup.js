@@ -5,6 +5,7 @@ const toggleBtn = document.getElementById('toggle');
 const outputDirInput = document.getElementById('output-dir');
 const saveDirBtn = document.getElementById('save-dir');
 const debugToggle = document.getElementById('debug-toggle');
+const verboseToggle = document.getElementById('verbose-toggle');
 
 function render(state) {
   sessionEl.textContent = state.sessionCount.toLocaleString();
@@ -32,6 +33,7 @@ function render(state) {
   }
 
   debugToggle.checked = !!state.debugLogging;
+  verboseToggle.checked = !!state.verboseLogging;
 }
 
 function refresh() {
@@ -67,6 +69,12 @@ saveDirBtn.addEventListener('click', () => {
 
 debugToggle.addEventListener('change', () => {
   chrome.runtime.sendMessage({ type: 'SET_DEBUG', debugLogging: debugToggle.checked }, () => {
+    refresh();
+  });
+});
+
+verboseToggle.addEventListener('change', () => {
+  chrome.runtime.sendMessage({ type: 'SET_VERBOSE', verboseLogging: verboseToggle.checked }, () => {
     refresh();
   });
 });

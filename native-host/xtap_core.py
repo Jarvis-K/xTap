@@ -70,6 +70,14 @@ def write_log(lines, out_dir):
     return len(lines)
 
 
+def write_dump(filename, content, out_dir):
+    """Write a raw JSON dump file for discovery/debugging."""
+    dump_file = os.path.join(out_dir, filename)
+    with open(dump_file, 'w') as f:
+        f.write(content)
+    return dump_file
+
+
 def test_path(out_dir):
     """Test that we can write to the output directory. Raises on failure."""
     os.makedirs(out_dir, exist_ok=True)

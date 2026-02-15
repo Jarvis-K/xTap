@@ -16,6 +16,7 @@ let sessionCount = 0;
 let allTimeCount = 0;
 let outputDir = '';
 let debugLogging = false;
+let verboseLogging = false;
 let logBuffer = [];
 
 // --- Transport state ---
@@ -35,12 +36,13 @@ async function saveState() {
 }
 
 async function restoreState() {
-  const stored = await chrome.storage.local.get(['seenIds', 'allTimeCount', 'captureEnabled', 'outputDir', 'debugLogging']);
+  const stored = await chrome.storage.local.get(['seenIds', 'allTimeCount', 'captureEnabled', 'outputDir', 'debugLogging', 'verboseLogging']);
   if (stored.seenIds) seenIds = new Set(stored.seenIds);
   if (typeof stored.allTimeCount === 'number') allTimeCount = stored.allTimeCount;
   if (typeof stored.captureEnabled === 'boolean') captureEnabled = stored.captureEnabled;
   if (typeof stored.outputDir === 'string') outputDir = stored.outputDir;
   if (typeof stored.debugLogging === 'boolean') debugLogging = stored.debugLogging;
+  if (typeof stored.verboseLogging === 'boolean') verboseLogging = stored.verboseLogging;
 }
 
 // --- Debug logging ---
@@ -214,6 +216,10 @@ async function sendToHost(msg) {
         path = '/log';
         body = { lines: msg.lines };
         if (msg.outputDir) body.outputDir = msg.outputDir;
+      } else if (msg.type === 'DUMP') {
+        path = '/dump';
+        body = { filename: msg.filename, content: msg.content };
+        if (msg.outputDir) body.outputDir = msg.outputDir;
       } else {
         path = '/tweets';
         body = { tweets: msg.tweets };
@@ -327,6 +333,65 @@ function updateBadge() {
   chrome.action.setBadgeBackgroundColor({ color: '#1D9BF0' });
 }
 
+// --- Verbose logging (discovery mode) ---
+
+function summarizeShape(obj, depth = 0, maxDepth = 3) {
+  if (depth >= maxDepth) return typeof obj === 'object' && obj !== null ? (Array.isArray(obj) ? '[…]' : '{…}') : typeof obj;
+  if (obj === null) return 'null';
+  if (Array.isArray(obj)) {
+    if (obj.length === 0) return '[]';
+    return `[${obj.length}× ${summarizeShape(obj[0], depth + 1, maxDepth)}]`;
+  }
+  if (typeof obj === 'object') {
+    const keys = Object.keys(obj);
+    if (keys.length === 0) return '{}';
+    const entries = keys.slice(0, 12).map(k => `${k}: ${summarizeShape(obj[k], depth + 1, maxDepth)}`);
+    if (keys.length > 12) entries.push(`…+${keys.length - 12} more`);
+    return `{ ${entries.join(', ')} }`;
+  }
+  if (typeof obj === 'string') return obj.length > 80 ? `str(${obj.length})` : JSON.stringify(obj);
+  return String(obj);
+}
+
+function verboseLog(endpoint, data) {
+  if (!verboseLogging) return;
+  const shape = summarizeShape(data);
+  console.log(`[xTap:verbose] ${endpoint} response shape: ${shape}`);
+
+  // Dump full JSON to file for reverse engineering.
+  // Configure via console:
+  //   chrome.storage.local.set({verboseDumpIds: ['1234567890']})   — dump responses containing these IDs
+  //   chrome.storage.local.set({verboseDumpEndpoint: 'TweetDetail'}) — dump all responses for this endpoint
+  // Dumps are written to <outputDir>/dump-<endpoint>-<timestamp>.json
+  chrome.storage.local.get(['verboseDumpIds', 'verboseDumpEndpoint'], (cfg) => {
+    let shouldDump = false;
+    let reason = '';
+
+    if (cfg.verboseDumpEndpoint === endpoint) {
+      shouldDump = true;
+      reason = `endpoint=${endpoint}`;
+    }
+    if (!shouldDump && cfg.verboseDumpIds?.length) {
+      const json = JSON.stringify(data);
+      for (const id of cfg.verboseDumpIds) {
+        if (json.includes(id)) {
+          shouldDump = true;
+          reason = `id=${id}`;
+          break;
+        }
+      }
+    }
+
+    if (shouldDump) {
+      const ts = Date.now();
+      const filename = `dump-${endpoint}-${ts}.json`;
+      const content = JSON.stringify(data, null, 2);
+      sendToHost({ type: 'DUMP', filename, content, outputDir: outputDir || undefined });
+      console.log(`[xTap:dump] ${endpoint} (${reason}) → ${filename} (${content.length} chars)`);
+    }
+  });
+}
+
 // --- Message handling ---
 
 // Endpoints that use /i/api/graphql/ but never contain tweets
@@ -344,8 +409,12 @@ const IGNORED_ENDPOINTS = new Set([
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'GRAPHQL_RESPONSE') {
+    verboseLog(msg.endpoint, msg.data);
     if (!captureEnabled) return;
-    if (IGNORED_ENDPOINTS.has(msg.endpoint)) return;
+    if (IGNORED_ENDPOINTS.has(msg.endpoint)) {
+      if (verboseLogging) console.log(`[xTap:verbose] ${msg.endpoint} (ignored)`);
+      return;
+    }
     try {
       const tweets = extractTweets(msg.endpoint, msg.data);
       for (const t of tweets) t.source_endpoint = msg.endpoint;
@@ -373,6 +442,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       buffered: buffer.length,
       outputDir,
       debugLogging,
+      verboseLogging,
       transport
     });
     return true;
@@ -387,6 +457,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       logBuffer = [];
     }
     sendResponse({ debugLogging });
+    return true;
+  }
+
+  if (msg.type === 'SET_VERBOSE') {
+    verboseLogging = !!msg.verboseLogging;
+    chrome.storage.local.set({ verboseLogging });
+    console.log(`[xTap] Verbose logging ${verboseLogging ? 'enabled' : 'disabled'}`);
+    sendResponse({ verboseLogging });
     return true;
   }
 
