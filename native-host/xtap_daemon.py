@@ -9,7 +9,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from xtap_core import DEFAULT_OUTPUT_DIR, load_seen_ids, resolve_output_dir, write_tweets, write_log, write_dump, test_path
 
-VERSION = '0.1.0'
+VERSION = '0.12.0'
 BIND_HOST = '127.0.0.1'
 BIND_PORT = 17381
 XTAP_DIR = os.path.expanduser('~/.xtap')
