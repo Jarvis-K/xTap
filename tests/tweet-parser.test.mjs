@@ -240,6 +240,23 @@ describe('normalizeTweet', () => {
     const t = normalizeTweet(raw);
     assert.deepStrictEqual(t.mentions, [{ id: 'm1', username: 'mentionuser' }]);
   });
+
+  it('handles missing user_results gracefully', () => {
+    const raw = makeRawTweet();
+    raw.core = {};
+    const t = normalizeTweet(raw);
+    assert.ok(t);
+    assert.equal(t.author.username, undefined);
+  });
+
+  it('handles user_results with no screen_name anywhere', () => {
+    const raw = makeRawTweet();
+    raw.core.user_results.result.core = {};
+    raw.core.user_results.result.legacy = { followers_count: 0, verified: false };
+    const t = normalizeTweet(raw);
+    assert.ok(t);
+    assert.equal(t.author.username, undefined);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -659,5 +676,287 @@ describe('extractTweets', () => {
     assert.equal(tweets.length, 2);
     assert.equal(tweets[0].id, '1');
     assert.equal(tweets[1].id, '2');
+  });
+
+  it('returns empty when known endpoint has wrong data structure', () => {
+    // HomeTimeline with missing nested path — triggers path-broke warning
+    const data = { data: { home: { home_timeline_urt: { wrong_key: true } } } };
+    const tweets = extractTweets('HomeTimeline', data);
+    assert.deepStrictEqual(tweets, []);
+  });
+
+  it('returns empty when known endpoint path hits non-object', () => {
+    // Path traversal hits a string instead of object — triggers "value is" warning
+    const data = { data: { home: 'not_an_object' } };
+    const tweets = extractTweets('HomeTimeline', data);
+    assert.deepStrictEqual(tweets, []);
+  });
+
+  it('unknown endpoint uses recursive fallback', () => {
+    // An endpoint not in INSTRUCTION_PATHS — triggers recursive search
+    const raw = makeRawTweet();
+    const data = {
+      data: {
+        something: {
+          nested: {
+            instructions: [
+              {
+                type: 'TimelineAddEntries',
+                entries: [
+                  {
+                    content: {
+                      entryType: 'TimelineTimelineItem',
+                      itemContent: {
+                        itemType: 'TimelineTweet',
+                        __typename: 'TimelineTweet',
+                        tweet_results: { result: raw },
+                      },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    };
+    const tweets = extractTweets('SomeNewEndpoint', data);
+    assert.equal(tweets.length, 1);
+  });
+
+  it('instruction.entry single-entry path', () => {
+    const raw = makeRawTweet();
+    const data = {
+      data: {
+        home: {
+          home_timeline_urt: {
+            instructions: [
+              {
+                type: 'TimelineAddToModule',
+                entry: {
+                  content: {
+                    entryType: 'TimelineTimelineItem',
+                    itemContent: {
+                      itemType: 'TimelineTweet',
+                      __typename: 'TimelineTweet',
+                      tweet_results: { result: raw },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    };
+    const tweets = extractTweets('HomeTimeline', data);
+    assert.equal(tweets.length, 1);
+  });
+
+  it('entry with direct itemContent fallback', () => {
+    const raw = makeRawTweet();
+    const data = {
+      data: {
+        home: {
+          home_timeline_urt: {
+            instructions: [
+              {
+                type: 'TimelineAddEntries',
+                entries: [
+                  {
+                    content: {
+                      itemContent: {
+                        itemType: 'TimelineTweet',
+                        __typename: 'TimelineTweet',
+                        tweet_results: { result: raw },
+                      },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    };
+    const tweets = extractTweets('HomeTimeline', data);
+    assert.equal(tweets.length, 1);
+  });
+
+  it('unknown entry type is skipped', () => {
+    const data = {
+      data: {
+        home: {
+          home_timeline_urt: {
+            instructions: [
+              {
+                type: 'TimelineAddEntries',
+                entries: [
+                  {
+                    content: {
+                      entryType: 'TimelineUnknownType',
+                      someData: true,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    };
+    const tweets = extractTweets('HomeTimeline', data);
+    assert.deepStrictEqual(tweets, []);
+  });
+
+  it('non-tweet item type is skipped', () => {
+    const data = {
+      data: {
+        home: {
+          home_timeline_urt: {
+            instructions: [
+              {
+                type: 'TimelineAddEntries',
+                entries: [
+                  {
+                    content: {
+                      entryType: 'TimelineTimelineItem',
+                      itemContent: {
+                        itemType: 'TimelinePromotedTweet',
+                        __typename: 'TimelinePromotedTweet',
+                      },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    };
+    const tweets = extractTweets('HomeTimeline', data);
+    assert.deepStrictEqual(tweets, []);
+  });
+
+  it('TimelineTweet with missing tweet_results.result', () => {
+    const data = {
+      data: {
+        home: {
+          home_timeline_urt: {
+            instructions: [
+              {
+                type: 'TimelineAddEntries',
+                entries: [
+                  {
+                    content: {
+                      entryType: 'TimelineTimelineItem',
+                      itemContent: {
+                        itemType: 'TimelineTweet',
+                        __typename: 'TimelineTweet',
+                        tweet_results: {},
+                      },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    };
+    const tweets = extractTweets('HomeTimeline', data);
+    assert.deepStrictEqual(tweets, []);
+  });
+
+  it('TweetWithVisibilityResults unwrapped', () => {
+    const innerTweet = makeRawTweet();
+    const wrapped = {
+      __typename: 'TweetWithVisibilityResults',
+      tweet: innerTweet,
+      tweetInterstitial: { text: 'some warning' },
+    };
+    const data = makeTimelineResponse(wrapped);
+    const tweets = extractTweets('HomeTimeline', data);
+    assert.equal(tweets.length, 1);
+    assert.equal(tweets[0].id, '100');
+  });
+
+  it('unknown typename with legacy+core still extracts', () => {
+    const raw = makeRawTweet({ __typename: 'TweetFuture' });
+    const data = makeTimelineResponse(raw);
+    const tweets = extractTweets('HomeTimeline', data);
+    assert.equal(tweets.length, 1);
+  });
+
+  it('unknown typename without legacy+core is skipped', () => {
+    const data = makeTimelineResponse({
+      __typename: 'SomethingElse',
+      id: '999',
+    });
+    const tweets = extractTweets('HomeTimeline', data);
+    assert.deepStrictEqual(tweets, []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractMedia — edge cases
+// ---------------------------------------------------------------------------
+
+describe('extractMedia edge cases', () => {
+  it('unknown media type triggers warning', () => {
+    const legacy = {
+      extended_entities: {
+        media: [
+          {
+            type: 'unknown_type',
+            ext_alt_text: null,
+          },
+        ],
+      },
+    };
+    const result = extractMedia(legacy);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].type, 'unknown_type');
+    assert.equal(result[0].url, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractTweets — extractUrls coverage (via normalizeTweet)
+// ---------------------------------------------------------------------------
+
+describe('normalizeTweet URLs', () => {
+  it('extracts URLs from entities', () => {
+    const raw = makeRawTweet({
+      legacy: {
+        id_str: '100',
+        user_id_str: 'u1',
+        full_text: 'Check this out https://t.co/abc',
+        created_at: 'Mon Jan 15 12:00:00 +0000 2024',
+        lang: 'en',
+        favorite_count: 0,
+        retweet_count: 0,
+        reply_count: 0,
+        bookmark_count: 0,
+        quote_count: 0,
+        entities: {
+          hashtags: [],
+          user_mentions: [],
+          urls: [
+            {
+              display_url: 'example.com',
+              expanded_url: 'https://example.com',
+              url: 'https://t.co/abc',
+            },
+          ],
+        },
+        conversation_id_str: '100',
+      },
+    });
+    const t = normalizeTweet(raw);
+    assert.equal(t.urls.length, 1);
+    assert.equal(t.urls[0].display, 'example.com');
+    assert.equal(t.urls[0].expanded, 'https://example.com');
+    assert.equal(t.urls[0].shortened, 'https://t.co/abc');
   });
 });
