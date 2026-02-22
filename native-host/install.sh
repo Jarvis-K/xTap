@@ -120,6 +120,58 @@ if [ "$OS" = "Darwin" ]; then
   echo "  Logs: ${XTAP_DIR}/daemon-stderr.log"
 fi
 
+# --- Linux: install HTTP daemon via systemd user service ---
+if [ "$OS" = "Linux" ]; then
+  DAEMON_PATH="${SCRIPT_DIR}/xtap_daemon.py"
+  XTAP_DIR="$HOME/.xtap"
+  XTAP_SECRET="${XTAP_DIR}/secret"
+  SERVICE_NAME="com.xtap.daemon"
+  SERVICE_TEMPLATE="${SCRIPT_DIR}/${SERVICE_NAME}.service"
+  SERVICE_DIR="$HOME/.config/systemd/user"
+  SERVICE_DEST="${SERVICE_DIR}/${SERVICE_NAME}.service"
+
+  chmod +x "$DAEMON_PATH"
+
+  # Create ~/.xtap/ with restricted permissions
+  mkdir -p "$XTAP_DIR"
+  chmod 700 "$XTAP_DIR"
+
+  # Generate auth token if not exists
+  if [ ! -f "$XTAP_SECRET" ]; then
+    python3 -c "import secrets; print(secrets.token_urlsafe(32))" > "$XTAP_SECRET"
+    chmod 600 "$XTAP_SECRET"
+    echo "Generated auth token: $XTAP_SECRET"
+  else
+    echo "Auth token already exists: $XTAP_SECRET"
+  fi
+
+  # Capture user's PATH so the daemon can find yt-dlp and other tools
+  USER_PATH="$PATH"
+
+  # Substitute service template
+  mkdir -p "$SERVICE_DIR"
+  sed \
+    -e "s|__PYTHON_PATH__|${PYTHON_PATH}|g" \
+    -e "s|__DAEMON_PATH__|${DAEMON_PATH}|g" \
+    -e "s|__HOME_DIR__|${HOME}|g" \
+    -e "s|__PATH__|${USER_PATH}|g" \
+    "$SERVICE_TEMPLATE" > "$SERVICE_DEST"
+
+  # Reload and enable
+  systemctl --user daemon-reload
+  systemctl --user enable --now "$SERVICE_NAME"
+
+  echo ""
+  echo "HTTP daemon installed:"
+  echo "  Service: $SERVICE_DEST"
+  echo "  Daemon: $DAEMON_PATH"
+  echo "  Listening on: 127.0.0.1:17381"
+  echo ""
+  echo "Useful commands:"
+  echo "  systemctl --user status $SERVICE_NAME"
+  echo "  journalctl --user -u $SERVICE_NAME -f"
+fi
+
 echo ""
 echo "Output directory (set XTAP_OUTPUT_DIR to change):"
 echo "  ${XTAP_OUTPUT_DIR:-$HOME/Downloads/xtap}"

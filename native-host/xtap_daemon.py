@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""xTap HTTP Daemon — runs via launchd, independent of Chrome's TCC sandbox."""
+"""xTap HTTP Daemon — runs as a system service (launchd/systemd/Scheduled Task)."""
 
 import json
 import os
+import platform
 import signal
 import sys
 import uuid
@@ -159,8 +160,21 @@ class DaemonHandler(BaseHTTPRequestHandler):
         self._send_json({'ok': True, **status})
 
 
+def _setup_stdio():
+    """Redirect stdio to log files when running under pythonw (no console)."""
+    if sys.stderr is not None and sys.stdout is not None:
+        return
+    os.makedirs(XTAP_DIR, exist_ok=True)
+    if sys.stdout is None:
+        sys.stdout = open(os.path.join(XTAP_DIR, 'daemon-stdout.log'), 'a')
+    if sys.stderr is None:
+        sys.stderr = open(os.path.join(XTAP_DIR, 'daemon-stderr.log'), 'a')
+
+
 def main():
     global _token, _seen_ids
+
+    _setup_stdio()
 
     _token = load_token()
 
@@ -174,8 +188,11 @@ def main():
         print(f'Received signal {signum}, shutting down...', file=sys.stderr)
         server.shutdown()
 
-    signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
+    if platform.system() == 'Windows':
+        signal.signal(signal.SIGBREAK, shutdown)
+    else:
+        signal.signal(signal.SIGTERM, shutdown)
 
     print(f'xTap daemon v{VERSION} listening on {BIND_HOST}:{BIND_PORT}', file=sys.stderr)
     server.serve_forever()

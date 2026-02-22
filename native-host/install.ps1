@@ -44,6 +44,63 @@ Write-Host "  Manifest: $ManifestPath"
 Write-Host "  Registry: $RegKey"
 Write-Host "  Host script: $HostPy"
 Write-Host "  Extension ID: $ExtensionId"
+
+# --- Install HTTP daemon via Scheduled Task ---
+$DaemonPy = Join-Path $ScriptDir "xtap_daemon.py"
+$XtapDir = Join-Path $HOME ".xtap"
+$XtapSecret = Join-Path $XtapDir "secret"
+$TaskName = "xTapDaemon"
+
+# Create ~/.xtap/ directory
+if (-not (Test-Path $XtapDir)) {
+    New-Item -ItemType Directory -Path $XtapDir -Force | Out-Null
+}
+
+# Generate auth token if not exists
+if (-not (Test-Path $XtapSecret)) {
+    $token = python -c "import secrets; print(secrets.token_urlsafe(32))"
+    Set-Content -Path $XtapSecret -Value $token -Encoding ASCII
+    Write-Host "Generated auth token: $XtapSecret"
+} else {
+    Write-Host "Auth token already exists: $XtapSecret"
+}
+
+# Find pythonw (preferred — no console window) or fall back to python
+$PythonW = Get-Command pythonw -ErrorAction SilentlyContinue
+if ($PythonW) {
+    $PythonExe = $PythonW.Source
+} else {
+    $PythonExe = (Get-Command python).Source
+}
+
+# Remove existing scheduled task if present
+if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+}
+
+# Create scheduled task: run at logon, restart on failure
+$Action = New-ScheduledTaskAction -Execute $PythonExe -Argument "`"$DaemonPy`""
+$Trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval ([TimeSpan]::FromMinutes(1))
+Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger `
+    -Settings $Settings -Description "xTap HTTP daemon" | Out-Null
+
+# Start the task now
+Start-ScheduledTask -TaskName $TaskName
+
+Write-Host ""
+Write-Host "HTTP daemon installed:"
+Write-Host "  Scheduled Task: $TaskName"
+Write-Host "  Daemon: $DaemonPy"
+Write-Host "  Python: $PythonExe"
+Write-Host "  Listening on: 127.0.0.1:17381"
+Write-Host ""
+Write-Host "Useful commands:"
+Write-Host "  Get-ScheduledTask -TaskName $TaskName"
+Write-Host "  Start-ScheduledTask -TaskName $TaskName"
+Write-Host "  Stop-ScheduledTask -TaskName $TaskName"
+
 Write-Host ""
 $outputDir = if ($env:XTAP_OUTPUT_DIR) { $env:XTAP_OUTPUT_DIR } else { Join-Path $HOME "Downloads\xtap" }
 Write-Host "Output directory (set XTAP_OUTPUT_DIR to change):"

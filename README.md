@@ -32,7 +32,7 @@ xTap is a Chrome extension that silently intercepts the GraphQL API responses X/
 - **Zero footprint** — no additional network requests; captures what Chrome already receives
 - **Structured output** — each tweet saved as a clean JSON object with author, metrics, media, and more
 - **Article support** — long-form X articles are captured with full text, inline image references, and Draft.js block structure
-- **Video download** (macOS) — download videos from tweets using yt-dlp (or direct MP4 fallback) via the extension popup. Requires the HTTP daemon. **Note:** unlike passive capture, video downloads make additional network requests to X and are not stealth.
+- **Video download** — download videos from tweets using yt-dlp (or direct MP4 fallback) via the extension popup. Requires the HTTP daemon. **Note:** unlike passive capture, video downloads make additional network requests to X and are not stealth.
 - **Pause / resume** — click the extension icon to toggle capture on the fly
 - **Live counter** — badge on the extension icon shows tweets captured this session
 - **Multi-tab aware** — multiple X tabs feed into the same service worker with shared deduplication
@@ -63,11 +63,11 @@ xTap is a Chrome extension that silently intercepts the GraphQL API responses X/
      └──────────┬─────────┬───────┘
                 │         │
           HTTP  │         │ native messaging
-       (macOS)  │         │ (fallback / Linux / Windows)
+      (primary) │         │ (fallback)
                 ▼         ▼
      ┌──────────────┐  ┌──────────────┐
      │ xtap_daemon  │  │ xtap_host.py │
-     │ (launchd)    │  │ (stdio)      │
+     │ (HTTP)       │  │ (stdio)      │
      └──────┬───────┘  └──────┬───────┘
             │                 │
             ▼                 ▼
@@ -78,8 +78,8 @@ xTap is a Chrome extension that silently intercepts the GraphQL API responses X/
 2. Payloads are relayed via a random-named `CustomEvent` to an ISOLATED world bridge, which forwards them to the service worker
 3. The service worker parses, normalizes, deduplicates, and batches tweets
 4. Batches are sent to disk via one of two transports:
-   - **HTTP daemon** (macOS): a standalone `xtap_daemon.py` process running via launchd on `127.0.0.1:17381`, with its own TCC entitlements — can write to `~/Documents`, iCloud Drive, and other protected paths
-   - **Native messaging** (fallback / Linux / Windows): the existing `xtap_host.py` over Chrome's stdio protocol
+   - **HTTP daemon**: a standalone `xtap_daemon.py` process on `127.0.0.1:17381`, managed by launchd (macOS), systemd (Linux), or Scheduled Task (Windows). On macOS, it runs outside Chrome's TCC sandbox and can write to protected paths like `~/Documents` and iCloud Drive
+   - **Native messaging** (fallback): `xtap_host.py` over Chrome's stdio protocol — used automatically if the daemon isn't running
 
 ## Is This Safe to Use?
 
@@ -132,7 +132,7 @@ cd native-host
 ./install.sh <your-extension-id>
 ```
 
-This installs both the native messaging host and an HTTP daemon (`xtap_daemon.py`) that runs via launchd. The daemon runs independently of Chrome's process tree and has its own TCC permissions, so it can write to protected paths like `~/Documents` and iCloud Drive. The installer captures your current `PATH` so the daemon can find tools like `yt-dlp`.
+This installs the native messaging host and an HTTP daemon (`xtap_daemon.py`) that runs via launchd. The daemon runs independently of Chrome's process tree and has its own TCC permissions, so it can write to protected paths like `~/Documents` and iCloud Drive. The installer captures your current `PATH` so the daemon can find tools like `yt-dlp`.
 
 The extension automatically detects the daemon and uses it as the primary transport, falling back to native messaging if unavailable.
 
@@ -146,6 +146,8 @@ cd native-host
 ./install.sh <your-extension-id>
 ```
 
+This installs the native messaging host and an HTTP daemon (`xtap_daemon.py`) that runs as a systemd user service. The daemon enables video downloads and provides the same HTTP transport as macOS.
+
 </details>
 
 <details>
@@ -155,6 +157,8 @@ cd native-host
 cd native-host
 .\install.ps1 <your-extension-id>
 ```
+
+This installs the native messaging host and an HTTP daemon (`xtap_daemon.py`) as a Windows Scheduled Task that starts at logon. The daemon enables video downloads and provides the same HTTP transport as macOS/Linux.
 
 </details>
 
@@ -167,11 +171,11 @@ Open [x.com](https://x.com) and browse normally. The badge counter on the extens
 ### Upgrading from a previous version
 
 After updating the extension files:
-1. Re-run `install.sh` — this is needed to update the daemon's PATH (required for yt-dlp support) and pick up new Python code
+1. Re-run the installer (`install.sh` on macOS/Linux, `install.ps1` on Windows) — this updates the daemon's PATH (required for yt-dlp support) and picks up new Python code
 2. Reload the extension at `chrome://extensions`
-3. Hard-reload any open X tabs (`Cmd+Shift+R`)
+3. Hard-reload any open X tabs (`Cmd+Shift+R` / `Ctrl+Shift+R`)
 
-If you previously installed xTap before v0.13.0, re-running `install.sh` is **required** for video download support — the daemon needs an updated launchd configuration to find yt-dlp on your PATH.
+If you previously installed xTap before v0.13.0 on macOS, re-running `install.sh` is **required** for video download support — the daemon needs an updated launchd configuration to find yt-dlp on your PATH. On Linux and Windows, the daemon is new in this version — running the installer will set it up automatically.
 
 ## Configuration
 
@@ -264,26 +268,45 @@ xTap/
 ├── icons/                     # Extension icons
 ├── lib/                       # Shared utilities
 └── native-host/
-    ├── xtap_core.py           # Shared file I/O logic
-    ├── xtap_host.py           # Native messaging host (Python, stdio)
-    ├── xtap_daemon.py         # HTTP daemon (macOS, launchd)
-    ├── com.xtap.daemon.plist  # launchd plist template
-    ├── install.sh             # Installer for macOS / Linux
-    ├── install.ps1            # Installer for Windows
-    └── xtap_host.bat          # Windows Python wrapper
+    ├── xtap_core.py              # Shared file I/O logic
+    ├── xtap_host.py              # Native messaging host (Python, stdio)
+    ├── xtap_daemon.py            # HTTP daemon
+    ├── com.xtap.daemon.plist     # launchd plist template (macOS)
+    ├── com.xtap.daemon.service   # systemd unit template (Linux)
+    ├── install.sh                # Installer for macOS / Linux
+    ├── install.ps1               # Installer for Windows
+    ├── xtap_host.bat             # Windows native host wrapper
+    └── xtap_daemon.bat           # Windows daemon wrapper
 ```
 
 ## Development
 
 After modifying extension files (`background.js`, `lib/`, `content-*.js`, `popup.*`), reload the extension at `chrome://extensions` and hard-reload any open X tabs.
 
-After modifying Python host files (`xtap_core.py`, `xtap_host.py`, `xtap_daemon.py`), the native host picks up changes on next Chrome restart. On **macOS**, if you're using the HTTP daemon, restart it to pick up changes immediately:
+After modifying Python host files (`xtap_core.py`, `xtap_host.py`, `xtap_daemon.py`), the native host picks up changes on next Chrome restart. To restart the HTTP daemon immediately:
 
+**macOS (launchd):**
 ```bash
 launchctl kickstart -k gui/$(id -u)/com.xtap.daemon   # restart
 launchctl bootout gui/$(id -u)/com.xtap.daemon         # stop
 launchctl print gui/$(id -u)/com.xtap.daemon           # status
 tail -f ~/.xtap/daemon-stderr.log                       # logs
+```
+
+**Linux (systemd):**
+```bash
+systemctl --user restart com.xtap.daemon               # restart
+systemctl --user stop com.xtap.daemon                  # stop
+systemctl --user status com.xtap.daemon                # status
+journalctl --user -u com.xtap.daemon -f               # logs
+```
+
+**Windows (Scheduled Task, PowerShell):**
+```powershell
+Stop-ScheduledTask -TaskName xTapDaemon; Start-ScheduledTask -TaskName xTapDaemon  # restart
+Stop-ScheduledTask -TaskName xTapDaemon                 # stop
+Get-ScheduledTask -TaskName xTapDaemon                  # status
+Get-Content ~\.xtap\daemon-stderr.log -Tail 50 -Wait   # logs
 ```
 
 ## License

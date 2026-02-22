@@ -88,14 +88,14 @@ verboseToggle.addEventListener('change', () => {
   });
 });
 
-// --- Video download (macOS / HTTP daemon only) ---
+// --- Video download (HTTP daemon only) ---
 
 let pollTimer = null;
 let currentTransport = null;
 let videoChecked = false;
 
 function checkForVideo() {
-  // Video download requires the HTTP daemon (macOS only)
+  // Video download requires the HTTP daemon
   if (currentTransport !== 'http') return;
   // Only check once per popup open
   if (videoChecked) return;
