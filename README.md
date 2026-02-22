@@ -64,7 +64,8 @@ xTap is a Chrome extension that silently intercepts the GraphQL API responses X/
      └──────────┬─────────┬───────┘
                 │         │
           HTTP  │         │ native messaging
-      (primary) │         │ (fallback)
+      (primary) │         │ (token bootstrap
+                │         │  + data fallback)
                 ▼         ▼
      ┌──────────────┐  ┌──────────────┐
      │ xtap_daemon  │  │ xtap_host.py │
@@ -80,7 +81,7 @@ xTap is a Chrome extension that silently intercepts the GraphQL API responses X/
 3. The service worker parses, normalizes, deduplicates, and batches tweets
 4. Batches are sent to disk via one of two transports:
    - **HTTP daemon**: a standalone `xtap_daemon.py` process on `127.0.0.1:17381`, managed by launchd (macOS), systemd (Linux), or Scheduled Task (Windows). On macOS, it runs outside Chrome's TCC sandbox and can write to protected paths like `~/Documents` and iCloud Drive
-   - **Native messaging** (fallback): `xtap_host.py` over Chrome's stdio protocol — used automatically if the daemon isn't running
+   - **Native messaging**: `xtap_host.py` over Chrome's stdio protocol — used at startup to retrieve the daemon's auth token (`GET_TOKEN`), and as a data transport fallback if HTTP is unavailable
 
 ## Is This Safe to Use?
 

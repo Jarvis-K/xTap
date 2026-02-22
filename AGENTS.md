@@ -32,7 +32,7 @@ background.js (Service Worker, ES module)
 │   Endpoints: GET /status, POST /tweets, /log, /test-path,     │
 │   /check-ytdlp, /download-video, /download-status             │
 └────────────────────────────────────────────────────────────────┘
-┌─── Native messaging (fallback) ────────────────────────────────┐
+┌─── Native messaging (bootstrap + fallback) ───────────────────┐
 │ xtap_host.py (Python, stdio)                                   │
 │   Chrome native messaging protocol                             │
 │   Also serves GET_TOKEN to bootstrap HTTP transport            │
@@ -47,7 +47,7 @@ debug-YYYY-MM-DD.log     (when debug logging enabled)
 
 - **Two content scripts (MAIN + ISOLATED):** Chrome MV3 requires this split. MAIN world can patch browser APIs but can't use chrome.runtime. ISOLATED world bridges the gap.
 - **Random event channel:** The CustomEvent name is generated per page load (`'_' + Math.random().toString(36).slice(2)`) and passed via a `<meta>` tag that's immediately removed. Avoids predictable DOM markers.
-- **Dual transport (HTTP + native messaging):** The HTTP daemon (`xtap_daemon.py`) is managed by launchd (macOS), systemd (Linux), or Scheduled Task (Windows). On macOS, it additionally runs outside Chrome's TCC sandbox, allowing writes to protected paths. The extension tries HTTP first, falls back to native messaging.
+- **Dual transport (HTTP + native messaging):** The HTTP daemon (`xtap_daemon.py`) is managed by launchd (macOS), systemd (Linux), or Scheduled Task (Windows). On macOS, it additionally runs outside Chrome's TCC sandbox, allowing writes to protected paths. At startup, the extension connects to the native host to request `GET_TOKEN` (reads `~/.xtap/secret`), then uses that token for HTTP transport. If HTTP is unavailable, native messaging serves as the data transport fallback.
 - **Token bootstrap:** On first run with the daemon installed, the extension connects to the native host once to request `GET_TOKEN`, which reads `~/.xtap/secret`. The token is cached in `chrome.storage.local` and used for subsequent HTTP requests. The native port is then disconnected.
 - **Shared core logic:** `xtap_core.py` contains all file I/O logic (load seen IDs, resolve output dir, write tweets/logs, test path), used by both `xtap_host.py` and `xtap_daemon.py`.
 - **Dedup in service worker:** Multiple tabs feed the same service worker. `seenIds` Set (max 50,000, FIFO eviction) prevents duplicates. Persisted to `chrome.storage.local` across sessions. Both host and daemon also load seen IDs from existing JSONL files on startup.
