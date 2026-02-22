@@ -290,25 +290,25 @@ After modifying Python host files (`xtap_core.py`, `xtap_host.py`, `xtap_daemon.
 **macOS (launchd):**
 ```bash
 launchctl kickstart -k gui/$(id -u)/com.xtap.daemon   # restart
-launchctl bootout gui/$(id -u)/com.xtap.daemon         # stop
-launchctl print gui/$(id -u)/com.xtap.daemon           # status
-tail -f ~/.xtap/daemon-stderr.log                       # logs
+launchctl bootout gui/$(id -u)/com.xtap.daemon        # stop
+launchctl print gui/$(id -u)/com.xtap.daemon          # status
+tail -f ~/.xtap/daemon-stderr.log                     # logs
 ```
 
 **Linux (systemd):**
 ```bash
-systemctl --user restart com.xtap.daemon               # restart
-systemctl --user stop com.xtap.daemon                  # stop
-systemctl --user status com.xtap.daemon                # status
-journalctl --user -u com.xtap.daemon -f               # logs
+systemctl --user restart com.xtap.daemon   # restart
+systemctl --user stop com.xtap.daemon      # stop
+systemctl --user status com.xtap.daemon    # status
+journalctl --user -u com.xtap.daemon -f    # logs
 ```
 
 **Windows (Scheduled Task, PowerShell):**
 ```powershell
 Stop-ScheduledTask -TaskName xTapDaemon; Start-ScheduledTask -TaskName xTapDaemon  # restart
-Stop-ScheduledTask -TaskName xTapDaemon                 # stop
-Get-ScheduledTask -TaskName xTapDaemon                  # status
-Get-Content ~\.xtap\daemon-stderr.log -Tail 50 -Wait   # logs
+Stop-ScheduledTask -TaskName xTapDaemon                                            # stop
+Get-ScheduledTask -TaskName xTapDaemon                                             # status
+Get-Content ~\.xtap\daemon-stderr.log -Tail 50 -Wait                               # logs
 ```
 
 ## Testing
