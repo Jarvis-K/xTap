@@ -62,9 +62,9 @@ def send_message(msg):
 
 def main():
     out_dir = DEFAULT_OUTPUT_DIR
-    os.makedirs(out_dir, exist_ok=True)
-    seen_ids = load_seen_ids(out_dir)
+    seen_ids = set()
     custom_dirs = set()
+    storage_ready = False
 
     while True:
         try:
@@ -77,6 +77,17 @@ def main():
 
         if msg is None:
             break
+
+        # Keep GET_TOKEN path independent from disk permissions / output dir setup.
+        # This allows HTTP token bootstrap even if default output path is temporarily invalid.
+        if msg.get('type') != 'GET_TOKEN' and not storage_ready:
+            try:
+                os.makedirs(out_dir, exist_ok=True)
+                seen_ids = load_seen_ids(out_dir)
+                storage_ready = True
+            except Exception as e:
+                send_message({'ok': False, 'error': f'Failed to initialize output dir "{out_dir}": {e}'})
+                continue
 
         try:
             _handle_message(msg, out_dir, seen_ids, custom_dirs)

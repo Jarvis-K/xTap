@@ -30,9 +30,22 @@ class FakeStdin:
         self.buffer = reader
 
 
+class FakeStdout:
+    def __init__(self):
+        self.buffer = io.BytesIO()
+
+
 def _pack_msg(obj):
     payload = json.dumps(obj).encode('utf-8')
     return struct.pack('<I', len(payload)) + payload
+
+
+def _read_framed(buf):
+    raw = buf.read(4)
+    if not raw:
+        return None
+    size = struct.unpack('<I', raw)[0]
+    return json.loads(buf.read(size))
 
 
 def test_read_message_handles_chunked_pipe(monkeypatch):
@@ -59,3 +72,32 @@ def test_read_message_eof_mid_payload_raises_eoferror(monkeypatch):
 
     with pytest.raises(EOFError, match='Unexpected EOF'):
         xtap_host.read_message()
+
+
+def test_get_token_does_not_require_storage_init(monkeypatch, tmp_path):
+    secret = tmp_path / 'secret'
+    secret.write_text('tok123', encoding='utf-8')
+    monkeypatch.setattr(xtap_host, 'XTAP_SECRET', str(secret))
+    monkeypatch.setattr(xtap_host, 'DEFAULT_OUTPUT_DIR', '/forbidden-output-dir')
+
+    call_count = {'makedirs': 0}
+
+    def fail_makedirs(*_args, **_kwargs):
+        call_count['makedirs'] += 1
+        raise PermissionError('no access')
+
+    raw_in = _pack_msg({'type': 'GET_TOKEN'})
+    fake_in = FakeStdin(io.BytesIO(raw_in))
+    fake_out = FakeStdout()
+    monkeypatch.setattr(xtap_host.sys, 'stdin', fake_in)
+    monkeypatch.setattr(xtap_host.sys, 'stdout', fake_out)
+    monkeypatch.setattr(xtap_host.os, 'makedirs', fail_makedirs)
+
+    xtap_host.main()
+
+    fake_out.buffer.seek(0)
+    msg = _read_framed(fake_out.buffer)
+    assert msg['ok'] is True
+    assert msg['token'] == 'tok123'
+    assert msg['port'] == xtap_host.XTAP_PORT
+    assert call_count['makedirs'] == 0

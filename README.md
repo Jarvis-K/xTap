@@ -84,6 +84,7 @@ xTap is a Chrome extension that silently intercepts the GraphQL API responses X/
    - **Native messaging**: `xtap_host.py` over Chrome's stdio protocol — used at startup to retrieve the daemon's auth token (`GET_TOKEN`), and as a data transport fallback if HTTP is unavailable
 
 The native host reads Chrome's length-prefixed stdio frames with exact-length reads so fragmented pipe delivery does not terminate the host prematurely.
+`GET_TOKEN` bootstrap is handled before output-directory initialization, so temporary output-path permission issues do not block HTTP token retrieval.
 
 ## Is This Safe to Use?
 
