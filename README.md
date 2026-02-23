@@ -83,6 +83,8 @@ xTap is a Chrome extension that silently intercepts the GraphQL API responses X/
    - **HTTP daemon**: a standalone `xtap_daemon.py` process on `127.0.0.1:17381`, managed by launchd (macOS), systemd (Linux), or Scheduled Task (Windows). On macOS, it runs outside Chrome's TCC sandbox and can write to protected paths like `~/Documents` and iCloud Drive
    - **Native messaging**: `xtap_host.py` over Chrome's stdio protocol — used at startup to retrieve the daemon's auth token (`GET_TOKEN`), and as a data transport fallback if HTTP is unavailable
 
+The native host reads Chrome's length-prefixed stdio frames with exact-length reads so fragmented pipe delivery does not terminate the host prematurely.
+
 ## Is This Safe to Use?
 
 X is [rolling out stricter detection for automation and bots](https://x.com/nikitabier/status/2022496540275937525). The key line: *"If a human is not tapping on the screen, the account and all associated accounts will likely be suspended."*

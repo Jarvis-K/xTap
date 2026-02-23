@@ -53,7 +53,7 @@ debug-YYYY-MM-DD.log     (when debug logging enabled)
 - **Dedup in service worker:** Multiple tabs feed the same service worker. `seenIds` Set (max 50,000, FIFO eviction) prevents duplicates. Persisted to `chrome.storage.local` across sessions. Both host and daemon also load seen IDs from existing JSONL files on startup.
 - **Jittered flush:** Batch flush uses `setTimeout` with randomized interval (30s base + up to 50% jitter = 30–45s), re-randomized each cycle. Avoids clockwork-regular patterns.
 - **Path validation:** When the user sets a custom output directory, the service worker sends a `TEST_PATH` message (via HTTP or native), which attempts `makedirs` + write/delete of a temp file before accepting the path.
-- **Error resilience:** The native host wraps per-message handling in try/except and responds with `{ok: false, error: "..."}` instead of crashing. The HTTP daemon returns error status codes. The service worker tracks rapid disconnects to detect crash loops and auto-falls back from HTTP to native on failure.
+- **Error resilience:** The native host wraps per-message handling in try/except and responds with `{ok: false, error: "..."}` instead of crashing. Native message framing uses exact-length reads (handles partial pipe reads safely) to avoid premature host exits. The HTTP daemon returns error status codes. The service worker tracks rapid disconnects to detect crash loops and auto-falls back from HTTP to native on failure.
 
 ## Stealth Constraints
 

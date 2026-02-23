@@ -12,15 +12,45 @@ from xtap_core import (DEFAULT_OUTPUT_DIR, load_seen_ids, resolve_output_dir,
 XTAP_PORT = 17381
 XTAP_DIR = os.path.expanduser('~/.xtap')
 XTAP_SECRET = os.path.join(XTAP_DIR, 'secret')
+MAX_MESSAGE_BYTES = 32 * 1024 * 1024
+
+
+def read_exact(stream, size):
+    """Read exactly `size` bytes from stream.
+
+    Returns None only when EOF is reached before reading any byte.
+    Raises EOFError if EOF happens mid-frame.
+    """
+    chunks = []
+    total = 0
+    while total < size:
+        chunk = stream.read(size - total)
+        if not chunk:
+            if total == 0:
+                return None
+            raise EOFError('Unexpected EOF while reading native message')
+        chunks.append(chunk)
+        total += len(chunk)
+    return b''.join(chunks)
 
 
 def read_message():
-    raw_length = sys.stdin.buffer.read(4)
-    if not raw_length or len(raw_length) < 4:
+    raw_length = read_exact(sys.stdin.buffer, 4)
+    if raw_length is None:
         return None
+
     length = struct.unpack('<I', raw_length)[0]
-    data = sys.stdin.buffer.read(length)
-    return json.loads(data)
+    if length > MAX_MESSAGE_BYTES:
+        raise ValueError(f'Message too large ({length} bytes)')
+
+    data = read_exact(sys.stdin.buffer, length)
+    if data is None:
+        raise EOFError('Unexpected EOF while reading native message payload')
+
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError as e:
+        raise ValueError(f'Invalid JSON payload: {e}') from e
 
 
 def send_message(msg):
@@ -37,7 +67,14 @@ def main():
     custom_dirs = set()
 
     while True:
-        msg = read_message()
+        try:
+            msg = read_message()
+        except EOFError:
+            break
+        except Exception as e:
+            send_message({'ok': False, 'error': f'Invalid native message: {e}'})
+            continue
+
         if msg is None:
             break
 
