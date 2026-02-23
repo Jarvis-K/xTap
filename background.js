@@ -6,9 +6,12 @@ const BATCH_SIZE = 50;
 const FLUSH_INTERVAL_MS = 30_000;
 const MAX_SEEN_IDS = 50_000;
 const HTTP_TIMEOUT_MS = 10_000;
+const TOKEN_BOOTSTRAP_TIMEOUT_MS = 5_000;
+const BOOTSTRAP_BACKOFF_BASE_MS = 2_000;
+const BOOTSTRAP_BACKOFF_MAX_MS = 300_000;
+const HTTP_RECOVERY_TICK_MS = 30_000;
 
 let captureEnabled = true;
-let nativePort = null;
 let buffer = [];
 let flushTimer = null;
 let seenIds = new Set();
@@ -17,6 +20,7 @@ let allTimeCount = 0;
 let outputDir = '';
 let debugLogging = false;
 let verboseLogging = false;
+let allowNativeFallback = true;
 let logBuffer = [];
 let readyResolve;
 const ready = new Promise(r => { readyResolve = r; });
@@ -30,8 +34,14 @@ const activeDownloads = new Map();
 // --- Transport state ---
 // 'http' | 'native' | 'none'
 let transport = 'none';
+// 'http_ready' | 'http_degraded' | 'native_fallback' | 'no_transport'
+let transportState = 'no_transport';
 let httpToken = null;
 let httpPort = null;
+let bootstrapTimer = null;
+let bootstrapAttempt = 0;
+let bootstrapInFlight = false;
+let recoveryTimer = null;
 
 // --- State persistence ---
 
@@ -44,13 +54,14 @@ async function saveState() {
 }
 
 async function restoreState() {
-  const stored = await chrome.storage.local.get(['seenIds', 'allTimeCount', 'captureEnabled', 'outputDir', 'debugLogging', 'verboseLogging']);
+  const stored = await chrome.storage.local.get(['seenIds', 'allTimeCount', 'captureEnabled', 'outputDir', 'debugLogging', 'verboseLogging', 'allowNativeFallback']);
   if (stored.seenIds) seenIds = new Set(stored.seenIds);
   if (typeof stored.allTimeCount === 'number') allTimeCount = stored.allTimeCount;
   if (typeof stored.captureEnabled === 'boolean') captureEnabled = stored.captureEnabled;
   if (typeof stored.outputDir === 'string') outputDir = stored.outputDir;
   if (typeof stored.debugLogging === 'boolean') debugLogging = stored.debugLogging;
   if (typeof stored.verboseLogging === 'boolean') verboseLogging = stored.verboseLogging;
+  if (typeof stored.allowNativeFallback === 'boolean') allowNativeFallback = stored.allowNativeFallback;
 }
 
 // --- Debug logging ---
@@ -105,8 +116,36 @@ async function probeHttp(port, token) {
   }
 }
 
+async function getTokenViaDaemon(port = 17381) {
+  try {
+    const resp = await fetch(`http://127.0.0.1:${port}/bootstrap-token`, {
+      signal: AbortSignal.timeout(3000)
+    });
+    const data = await resp.json();
+    if (data?.ok && data?.token && data?.port) {
+      return { token: data.token, port: data.port };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 async function getTokenViaNative() {
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        port.disconnect();
+      } catch {
+        // no-op
+      }
+      resolve(result);
+    };
+
     let port;
     try {
       port = chrome.runtime.connectNative(NATIVE_HOST);
@@ -115,160 +154,264 @@ async function getTokenViaNative() {
       return;
     }
     const timer = setTimeout(() => {
-      port.disconnect();
-      resolve(null);
-    }, 5000);
+      finish(null);
+    }, TOKEN_BOOTSTRAP_TIMEOUT_MS);
     port.onMessage.addListener((msg) => {
-      clearTimeout(timer);
-      port.disconnect();
       if (msg.ok && msg.token) {
-        resolve({ token: msg.token, port: msg.port });
+        finish({ token: msg.token, port: msg.port });
       } else {
-        resolve(null);
+        finish(null);
       }
     });
     port.onDisconnect.addListener(() => {
-      clearTimeout(timer);
-      resolve(null);
+      finish(null);
     });
-    port.postMessage({ type: 'GET_TOKEN' });
+    try {
+      port.postMessage({ type: 'GET_TOKEN' });
+    } catch {
+      finish(null);
+    }
   });
 }
 
+function setTransport(mode, state, reason) {
+  const changed = transport !== mode || transportState !== state;
+  transport = mode;
+  transportState = state;
+  if (!changed) return;
+  if (reason) {
+    console.log(`[xTap] Transport -> ${state} (${mode}) | ${reason}`);
+  } else {
+    console.log(`[xTap] Transport -> ${state} (${mode})`);
+  }
+}
+
+function scheduleBootstrap(delayMs = 0, reason = '') {
+  if (transport === 'http' || bootstrapInFlight || bootstrapTimer) return;
+  bootstrapTimer = setTimeout(() => {
+    bootstrapTimer = null;
+    bootstrapHttpToken(reason);
+  }, Math.max(0, delayMs));
+}
+
+function startRecoveryLoop() {
+  if (recoveryTimer) return;
+  recoveryTimer = setInterval(() => {
+    if (transport !== 'http') {
+      scheduleBootstrap(0, 'periodic recovery tick');
+    }
+  }, HTTP_RECOVERY_TICK_MS);
+}
+
+function bootstrapBackoffMs(attempt) {
+  const base = Math.min(BOOTSTRAP_BACKOFF_MAX_MS, BOOTSTRAP_BACKOFF_BASE_MS * (2 ** Math.max(0, attempt - 1)));
+  const jitter = Math.floor(Math.random() * base * 0.3);
+  return base + jitter;
+}
+
+async function bootstrapHttpToken(reason = '') {
+  if (transport === 'http' || bootstrapInFlight) return;
+  bootstrapInFlight = true;
+  bootstrapAttempt += 1;
+  try {
+    let result = await getTokenViaDaemon(httpPort || 17381);
+    let source = 'daemon';
+    if (!result) {
+      result = await getTokenViaNative();
+      source = 'native';
+    }
+
+    if (result) {
+      const alive = await probeHttp(result.port, result.token);
+      if (alive) {
+        httpToken = result.token;
+        httpPort = result.port;
+        await chrome.storage.local.set({ httpToken, httpPort });
+        bootstrapAttempt = 0;
+        setTransport('http', 'http_ready', reason || 'token bootstrap succeeded');
+        console.log(`[xTap] Using HTTP transport (token from ${source})`);
+        return;
+      }
+    }
+
+    const delay = bootstrapBackoffMs(bootstrapAttempt);
+    setTransport('none', 'http_degraded', reason || 'token bootstrap failed');
+    console.warn(`[xTap] HTTP token bootstrap retry #${bootstrapAttempt} in ${delay}ms`);
+    scheduleBootstrap(delay, 'retry after bootstrap failure');
+  } finally {
+    bootstrapInFlight = false;
+  }
+}
+
 async function initTransport() {
-  // 1. Check cached token
+  // Fast path: cached token + daemon health check.
   const cached = await chrome.storage.local.get(['httpToken', 'httpPort']);
   if (cached.httpToken && cached.httpPort) {
     const alive = await probeHttp(cached.httpPort, cached.httpToken);
     if (alive) {
       httpToken = cached.httpToken;
       httpPort = cached.httpPort;
-      transport = 'http';
+      setTransport('http', 'http_ready', 'cached token accepted');
       console.log('[xTap] Using HTTP transport (cached token)');
       return;
     }
   }
 
-  // 2. Try to get token from native host
-  const result = await getTokenViaNative();
-  if (result) {
-    const alive = await probeHttp(result.port, result.token);
+  // Prefer daemon bootstrap over native startup path.
+  const daemonToken = await getTokenViaDaemon(httpPort || 17381);
+  if (daemonToken) {
+    const alive = await probeHttp(daemonToken.port, daemonToken.token);
     if (alive) {
-      httpToken = result.token;
-      httpPort = result.port;
-      transport = 'http';
+      httpToken = daemonToken.token;
+      httpPort = daemonToken.port;
       await chrome.storage.local.set({ httpToken, httpPort });
-      console.log('[xTap] Using HTTP transport (token from native host)');
+      setTransport('http', 'http_ready', 'token from daemon bootstrap');
+      console.log('[xTap] Using HTTP transport (token from daemon)');
       return;
     }
   }
 
-  // 3. Fall back to native messaging
-  connectNative();
-  if (nativePort) {
-    transport = 'native';
-    console.log('[xTap] Using native messaging transport');
-  } else {
-    transport = 'none';
-    console.warn('[xTap] No transport available');
-  }
+  // Degraded start: keep capture alive, bootstrap token in background.
+  setTransport('none', 'http_degraded', 'cached token unavailable or daemon not reachable');
+  scheduleBootstrap(0, 'initial bootstrap');
 }
 
 // --- Native messaging ---
 
-let disconnectCount = 0;
-let lastDisconnect = 0;
+async function sendViaNative(msg, timeoutMs = 8_000) {
+  return new Promise((resolve, reject) => {
+    let port;
+    let settled = false;
 
-function connectNative() {
-  if (nativePort) return;
-  try {
-    nativePort = chrome.runtime.connectNative(NATIVE_HOST);
-    nativePort.onDisconnect.addListener(() => {
-      const err = chrome.runtime.lastError?.message || 'unknown';
-      const now = Date.now();
-      disconnectCount++;
-      const rapid = (now - lastDisconnect) < 5000;
-      lastDisconnect = now;
-      if (rapid) {
-        console.error(`[xTap] Native host disconnected rapidly (${disconnectCount}x): ${err} — possible crash loop`);
-      } else {
-        console.warn(`[xTap] Native host disconnected: ${err}`);
+    const cleanup = () => {
+      try {
+        port.onMessage.removeListener(onMessage);
+      } catch {
+        // no-op
       }
-      nativePort = null;
-    });
-    nativePort.onMessage.addListener((msg) => {
-      if (!msg.ok && msg.error) {
-        console.error(`[xTap] Host error: ${msg.error}`);
-      } else if (msg.count !== undefined) {
-        console.log(`[xTap] Host wrote ${msg.count} tweets`);
-        disconnectCount = 0;
+      try {
+        port.onDisconnect.removeListener(onDisconnect);
+      } catch {
+        // no-op
       }
-    });
-    console.log('[xTap] Connected to native host');
-  } catch (e) {
-    console.error('[xTap] Failed to connect native host:', e);
-    nativePort = null;
+      try {
+        port.disconnect();
+      } catch {
+        // no-op
+      }
+    };
+
+    const finish = (err, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanup();
+      if (err) reject(err);
+      else resolve(value);
+    };
+
+    const onMessage = (nativeResp) => finish(null, nativeResp);
+    const onDisconnect = () => {
+      const err = chrome.runtime.lastError?.message;
+      if (err) finish(new Error(err));
+      else finish(null, null);
+    };
+
+    try {
+      port = chrome.runtime.connectNative(NATIVE_HOST);
+    } catch (e) {
+      reject(e);
+      return;
+    }
+
+    const timer = setTimeout(() => finish(new Error('Native host timeout')), timeoutMs);
+
+    port.onMessage.addListener(onMessage);
+    port.onDisconnect.addListener(onDisconnect);
+
+    try {
+      port.postMessage(msg);
+    } catch (e) {
+      finish(e);
+    }
+  });
+}
+
+function supportsNativeFallback(msg) {
+  if (!msg.type) return true; // tweet batch
+  return msg.type === 'LOG' || msg.type === 'DUMP' || msg.type === 'TEST_PATH';
+}
+
+function httpRouteFor(msg) {
+  if (msg.type === 'TEST_PATH') {
+    return { path: '/test-path', body: { outputDir: msg.outputDir } };
   }
+  if (msg.type === 'LOG') {
+    const body = { lines: msg.lines };
+    if (msg.outputDir) body.outputDir = msg.outputDir;
+    return { path: '/log', body };
+  }
+  if (msg.type === 'DUMP') {
+    const body = { filename: msg.filename, content: msg.content };
+    if (msg.outputDir) body.outputDir = msg.outputDir;
+    return { path: '/dump', body };
+  }
+  if (msg.type === 'CHECK_YTDLP') {
+    return { path: '/check-ytdlp', body: {} };
+  }
+  if (msg.type === 'DOWNLOAD_VIDEO') {
+    const body = { tweetUrl: msg.tweetUrl, directUrl: msg.directUrl, postDate: msg.postDate };
+    if (msg.outputDir) body.outputDir = msg.outputDir;
+    return { path: '/download-video', body };
+  }
+  if (msg.type === 'DOWNLOAD_STATUS') {
+    return { path: '/download-status', body: { downloadId: msg.downloadId } };
+  }
+  const body = { tweets: msg.tweets };
+  if (msg.outputDir) body.outputDir = msg.outputDir;
+  return { path: '/tweets', body };
 }
 
 // --- Unified send ---
 
 async function sendToHost(msg) {
-  if (transport === 'http') {
+  if (httpToken && httpPort) {
     try {
-      let path, body;
-      if (msg.type === 'TEST_PATH') {
-        path = '/test-path';
-        body = { outputDir: msg.outputDir };
-      } else if (msg.type === 'LOG') {
-        path = '/log';
-        body = { lines: msg.lines };
-        if (msg.outputDir) body.outputDir = msg.outputDir;
-      } else if (msg.type === 'DUMP') {
-        path = '/dump';
-        body = { filename: msg.filename, content: msg.content };
-        if (msg.outputDir) body.outputDir = msg.outputDir;
-      } else if (msg.type === 'CHECK_YTDLP') {
-        path = '/check-ytdlp';
-        body = {};
-      } else if (msg.type === 'DOWNLOAD_VIDEO') {
-        path = '/download-video';
-        body = { tweetUrl: msg.tweetUrl, directUrl: msg.directUrl, postDate: msg.postDate };
-        if (msg.outputDir) body.outputDir = msg.outputDir;
-      } else if (msg.type === 'DOWNLOAD_STATUS') {
-        path = '/download-status';
-        body = { downloadId: msg.downloadId };
-      } else {
-        path = '/tweets';
-        body = { tweets: msg.tweets };
-        if (msg.outputDir) body.outputDir = msg.outputDir;
-      }
+      const { path, body } = httpRouteFor(msg);
       const resp = await httpFetch('POST', path, body);
+      if (transport !== 'http') {
+        setTransport('http', 'http_ready', 'HTTP request succeeded');
+      }
       return resp;
     } catch (e) {
-      console.warn('[xTap] HTTP send failed, falling back to native:', e.message);
-      // Fall back to native
-      transport = 'native';
-      connectNative();
-      // Fall through to native send below
+      setTransport('none', 'http_degraded', `HTTP send failed: ${e.message}`);
+      scheduleBootstrap(0, 'HTTP send failure');
     }
   }
 
-  if (transport === 'native' || nativePort) {
-    if (!nativePort) connectNative();
-    if (nativePort) {
-      try {
-        nativePort.postMessage(msg);
-        return null; // native messaging is fire-and-forget for non-response messages
-      } catch (e) {
-        console.error('[xTap] Native send failed:', e);
-        nativePort = null;
-        return null;
-      }
+  if (supportsNativeFallback(msg)) {
+    if (!allowNativeFallback) {
+      setTransport('none', 'http_degraded', 'native fallback disabled by user');
+      scheduleBootstrap(0, 'native fallback disabled');
+      return null;
+    }
+    try {
+      const resp = await sendViaNative(msg);
+      setTransport('native', 'native_fallback', 'using on-demand native fallback');
+      scheduleBootstrap(0, 'attempt return to HTTP after native fallback');
+      return resp;
+    } catch (e) {
+      setTransport('none', 'no_transport', `native fallback failed: ${e.message}`);
+      console.warn('[xTap] Native fallback unavailable:', e.message);
+      return null;
     }
   }
 
-  console.warn('[xTap] No transport available, message dropped');
+  if (transport !== 'http') {
+    setTransport('none', 'http_degraded', 'HTTP daemon unavailable for this operation');
+    scheduleBootstrap(0, 'operation requires HTTP transport');
+  }
+  console.warn('[xTap] No transport available for this operation');
   return null;
 }
 
@@ -280,7 +423,6 @@ function scheduledFlush() {
 
 async function flushLogs() {
   if (logBuffer.length === 0) return;
-  if (transport === 'none') return;
   const lines = logBuffer.splice(0);
   const message = { type: 'LOG', lines };
   if (outputDir) message.outputDir = outputDir;
@@ -289,12 +431,6 @@ async function flushLogs() {
 
 async function flush() {
   if (buffer.length === 0 && logBuffer.length === 0) return;
-
-  if (transport === 'none') {
-    // Try to establish a transport
-    connectNative();
-    if (nativePort) transport = 'native';
-  }
 
   if (buffer.length > 0) {
     const batch = buffer.splice(0);
@@ -477,7 +613,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         outputDir,
         debugLogging,
         verboseLogging,
-        transport
+        transport,
+        transportState,
+        allowNativeFallback
       });
     })();
     return true;
@@ -503,39 +641,34 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'SET_TRANSPORT_PREFS') {
+    if (typeof msg.allowNativeFallback === 'boolean') {
+      allowNativeFallback = msg.allowNativeFallback;
+      chrome.storage.local.set({ allowNativeFallback });
+      if (!allowNativeFallback && transport === 'native') {
+        setTransport('none', 'http_degraded', 'native fallback disabled by user');
+      }
+    }
+    sendResponse({ ok: true, allowNativeFallback });
+    return true;
+  }
+
+  if (msg.type === 'FORCE_HTTP_RETRY') {
+    scheduleBootstrap(0, 'manual retry');
+    sendResponse({ ok: true });
+    return true;
+  }
+
   if (msg.type === 'SET_OUTPUT_DIR') {
     const newDir = msg.outputDir || '';
-    if (newDir && transport !== 'none') {
+    if (newDir) {
       sendToHost({ type: 'TEST_PATH', outputDir: newDir }).then((resp) => {
-        if (transport === 'http' && resp) {
-          // HTTP transport returns response directly
-          if (resp.ok) {
-            outputDir = newDir;
-            chrome.storage.local.set({ outputDir });
-            sendResponse({ outputDir });
-          } else {
-            sendResponse({ error: resp.error || 'Cannot write to that directory' });
-          }
-        } else if (transport === 'native') {
-          // Native transport: set up listener for response
-          const listener = (nativeResp) => {
-            if (nativeResp.type !== 'TEST_PATH') return;
-            nativePort.onMessage.removeListener(listener);
-            if (nativeResp.ok) {
-              outputDir = newDir;
-              chrome.storage.local.set({ outputDir });
-              sendResponse({ outputDir });
-            } else {
-              sendResponse({ error: nativeResp.error || 'Cannot write to that directory' });
-            }
-          };
-          if (nativePort) {
-            nativePort.onMessage.addListener(listener);
-          } else {
-            sendResponse({ error: 'No transport available' });
-          }
+        if (resp && resp.ok) {
+          outputDir = newDir;
+          chrome.storage.local.set({ outputDir });
+          sendResponse({ outputDir });
         } else {
-          sendResponse({ error: 'No transport available' });
+          sendResponse({ error: resp?.error || 'Cannot write to that directory' });
         }
       }).catch((e) => {
         sendResponse({ error: e.message });
@@ -640,6 +773,7 @@ restoreState().then(async () => {
   readyResolve();
   updateBadge();
   await initTransport();
+  startRecoveryLoop();
   function scheduleNextFlush() {
     const jitter = Math.random() * FLUSH_INTERVAL_MS * 0.5;
     flushTimer = setTimeout(() => { scheduledFlush(); scheduleNextFlush(); }, FLUSH_INTERVAL_MS + jitter);

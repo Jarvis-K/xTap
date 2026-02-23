@@ -65,6 +65,10 @@ class DaemonHandler(BaseHTTPRequestHandler):
         if self.path == '/status':
             self._send_json({'ok': True, 'version': VERSION})
             return
+        if self.path == '/bootstrap-token':
+            # Local bootstrap for extension startup. Daemon is bound to 127.0.0.1 only.
+            self._send_json({'ok': True, 'token': _token, 'port': BIND_PORT, 'version': VERSION})
+            return
         self._send_json({'ok': False, 'error': 'Not found'}, 404)
 
     def do_POST(self):

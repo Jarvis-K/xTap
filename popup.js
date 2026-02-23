@@ -6,6 +6,8 @@ const outputDirInput = document.getElementById('output-dir');
 const saveDirBtn = document.getElementById('save-dir');
 const debugToggle = document.getElementById('debug-toggle');
 const verboseToggle = document.getElementById('verbose-toggle');
+const nativeFallbackToggle = document.getElementById('native-fallback-toggle');
+const retryHttpBtn = document.getElementById('retry-http');
 const videoSection = document.getElementById('video-section');
 const videoLabel = document.getElementById('video-label');
 const ytdlpHint = document.getElementById('ytdlp-hint');
@@ -15,10 +17,15 @@ function render(state) {
   sessionEl.textContent = state.sessionCount.toLocaleString();
   alltimeEl.textContent = state.allTimeCount.toLocaleString();
 
-  if (state.connected) {
-    const mode = state.transport === 'http' ? ' (HTTP daemon)' : ' (Native host)';
-    statusEl.textContent = 'Saving to disk' + mode;
+  if (state.transportState === 'http_ready') {
+    statusEl.textContent = 'Saving to disk (HTTP daemon)';
     statusEl.className = 'status connected';
+  } else if (state.transportState === 'native_fallback') {
+    statusEl.textContent = 'Saving via native fallback (retrying HTTP)';
+    statusEl.className = 'status disconnected';
+  } else if (state.transportState === 'http_degraded') {
+    statusEl.textContent = 'HTTP unavailable, retrying...';
+    statusEl.className = 'status disconnected';
   } else {
     statusEl.textContent = 'Not connected';
     statusEl.className = 'status disconnected';
@@ -38,8 +45,12 @@ function render(state) {
 
   debugToggle.checked = !!state.debugLogging;
   verboseToggle.checked = !!state.verboseLogging;
+  nativeFallbackToggle.checked = state.allowNativeFallback !== false;
+  retryHttpBtn.disabled = state.transportState === 'http_ready';
+  retryHttpBtn.textContent = state.transportState === 'http_ready' ? 'HTTP connected' : 'Retry HTTP now';
 
   currentTransport = state.transport;
+  currentTransportState = state.transportState;
 }
 
 function refresh() {
@@ -88,15 +99,33 @@ verboseToggle.addEventListener('change', () => {
   });
 });
 
+nativeFallbackToggle.addEventListener('change', () => {
+  chrome.runtime.sendMessage({
+    type: 'SET_TRANSPORT_PREFS',
+    allowNativeFallback: nativeFallbackToggle.checked,
+  }, () => {
+    refresh();
+  });
+});
+
+retryHttpBtn.addEventListener('click', () => {
+  retryHttpBtn.disabled = true;
+  retryHttpBtn.textContent = 'Retrying...';
+  chrome.runtime.sendMessage({ type: 'FORCE_HTTP_RETRY' }, () => {
+    setTimeout(() => refresh(), 300);
+  });
+});
+
 // --- Video download (HTTP daemon only) ---
 
 let pollTimer = null;
 let currentTransport = null;
+let currentTransportState = null;
 let videoChecked = false;
 
 function checkForVideo() {
   // Video download requires the HTTP daemon
-  if (currentTransport !== 'http') return;
+  if (currentTransport !== 'http' || currentTransportState !== 'http_ready') return;
   // Only check once per popup open
   if (videoChecked) return;
   videoChecked = true;

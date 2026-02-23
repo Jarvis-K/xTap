@@ -190,6 +190,20 @@ button.paused {
   background: #b91c1c;
 }
 
+.retry-btn {
+  margin-top: 10px;
+  border-radius: 6px;
+  background: #22303c;
+  color: #e7e9ea;
+  font-size: 12px;
+  padding: 7px 10px;
+}
+
+.retry-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .toggle-row {
   display: flex;
   align-items: center;

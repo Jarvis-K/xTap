@@ -29,13 +29,14 @@ background.js (Service Worker, ES module)
 │ xtap_daemon.py (127.0.0.1:17381)                               │
 │   Managed by launchd (macOS), systemd (Linux), Scheduled Task  │
 │   (Windows). Bearer token auth from ~/.xtap/secret             │
-│   Endpoints: GET /status, POST /tweets, /log, /test-path,     │
+│   Endpoints: GET /status, /bootstrap-token, POST /tweets,     │
+│   /log, /test-path,                                           │
 │   /check-ytdlp, /download-video, /download-status             │
 └────────────────────────────────────────────────────────────────┘
 ┌─── Native messaging (bootstrap + fallback) ───────────────────┐
 │ xtap_host.py (Python, stdio)                                   │
 │   Chrome native messaging protocol                             │
-│   Also serves GET_TOKEN to bootstrap HTTP transport            │
+│   Also serves GET_TOKEN as a bootstrap fallback path           │
 └────────────────────────────────────────────────────────────────┘
   │  Both use shared logic from xtap_core.py
   ▼
@@ -47,14 +48,13 @@ debug-YYYY-MM-DD.log     (when debug logging enabled)
 
 - **Two content scripts (MAIN + ISOLATED):** Chrome MV3 requires this split. MAIN world can patch browser APIs but can't use chrome.runtime. ISOLATED world bridges the gap.
 - **Random event channel:** The CustomEvent name is generated per page load (`'_' + Math.random().toString(36).slice(2)`) and passed via a `<meta>` tag that's immediately removed. Avoids predictable DOM markers.
-- **Dual transport (HTTP + native messaging):** The HTTP daemon (`xtap_daemon.py`) is managed by launchd (macOS), systemd (Linux), or Scheduled Task (Windows). On macOS, it additionally runs outside Chrome's TCC sandbox, allowing writes to protected paths. At startup, the extension connects to the native host to request `GET_TOKEN` (reads `~/.xtap/secret`), then uses that token for HTTP transport. If HTTP is unavailable, native messaging serves as the data transport fallback.
-- **Token bootstrap:** On first run with the daemon installed, the extension connects to the native host once to request `GET_TOKEN`, which reads `~/.xtap/secret`. The token is cached in `chrome.storage.local` and used for subsequent HTTP requests. The native port is then disconnected.
-- **Token bootstrap:** On first run with the daemon installed, the extension connects to the native host once to request `GET_TOKEN`, which reads `~/.xtap/secret`. Token bootstrap is handled before any output-directory initialization, so path/permission issues do not block token retrieval. The token is cached in `chrome.storage.local` and used for subsequent HTTP requests. The native port is then disconnected.
+- **Dual transport (HTTP + native messaging):** The HTTP daemon (`xtap_daemon.py`) is managed by launchd (macOS), systemd (Linux), or Scheduled Task (Windows). On macOS, it additionally runs outside Chrome's TCC sandbox, allowing writes to protected paths. The service worker now treats HTTP as the primary path with background token-bootstrap retries; native messaging is used on-demand as a fallback path.
+- **Token bootstrap:** On first run with the daemon installed, the extension first requests `GET /bootstrap-token` from the local daemon and caches `{httpToken,httpPort}` in `chrome.storage.local`. If that fails, it falls back to native `GET_TOKEN` and keeps retrying with exponential backoff + jitter. Token bootstrap is handled before any output-directory initialization, so path/permission issues do not block token retrieval.
 - **Shared core logic:** `xtap_core.py` contains all file I/O logic (load seen IDs, resolve output dir, write tweets/logs, test path), used by both `xtap_host.py` and `xtap_daemon.py`.
 - **Dedup in service worker:** Multiple tabs feed the same service worker. `seenIds` Set (max 50,000, FIFO eviction) prevents duplicates. Persisted to `chrome.storage.local` across sessions. Both host and daemon also load seen IDs from existing JSONL files on startup.
 - **Jittered flush:** Batch flush uses `setTimeout` with randomized interval (30s base + up to 50% jitter = 30–45s), re-randomized each cycle. Avoids clockwork-regular patterns.
 - **Path validation:** When the user sets a custom output directory, the service worker sends a `TEST_PATH` message (via HTTP or native), which attempts `makedirs` + write/delete of a temp file before accepting the path.
-- **Error resilience:** The native host wraps per-message handling in try/except and responds with `{ok: false, error: "..."}` instead of crashing. Native message framing uses exact-length reads (handles partial pipe reads safely) to avoid premature host exits. The HTTP daemon returns error status codes. The service worker tracks rapid disconnects to detect crash loops and auto-falls back from HTTP to native on failure.
+- **Error resilience:** The native host wraps per-message handling in try/except and responds with `{ok: false, error: "..."}` instead of crashing. Native message framing uses exact-length reads (handles partial pipe reads safely) to avoid premature host exits. The HTTP daemon returns error status codes. The service worker enters `http_degraded` on HTTP failures and schedules token-bootstrap retries instead of holding a fragile long-lived native port.
 
 ## Stealth Constraints
 
@@ -181,7 +181,7 @@ X sometimes returns `TimelineTweet` entries where `tweet_results.result` is miss
 - **tweet-parser.js** is the most fragile file — it handles multiple GraphQL response shapes and X changes their API schema without notice. The recursive fallback (`findInstructionsRecursive`) catches many new endpoint shapes automatically, but field-level changes to tweet objects will need manual updates to `normalizeTweet()`.
 - **Service worker module:** `background.js` is loaded as an ES module (`"type": "module"` in manifest). It imports `tweet-parser.js` directly.
 - **HTTP daemon:** `xtap_daemon.py` binds `127.0.0.1:17381`. Auth token stored at `~/.xtap/secret` (mode 600). Managed by launchd (macOS: `launchctl kickstart -k gui/$(id -u)/com.xtap.daemon`), systemd (Linux: `systemctl --user restart com.xtap.daemon`), or Scheduled Task (Windows: `Stop-ScheduledTask -TaskName xTapDaemon; Start-ScheduledTask -TaskName xTapDaemon`). Logs: macOS/Windows at `~/.xtap/daemon-stderr.log`, Linux via `journalctl --user -u com.xtap.daemon`.
-- **Transport debugging:** The popup shows "(HTTP daemon)" or "(Native host)" next to the status. Service worker console logs which transport was selected at startup.
+- **Transport debugging:** The popup shows transport status (`HTTP daemon`, `HTTP unavailable, retrying`, `native fallback`) and provides `Retry HTTP now` plus `Allow native fallback` controls. Service worker console logs transport state transitions (`http_ready`, `http_degraded`, `native_fallback`, `no_transport`), including retry scheduling.
 
 ## Contributing
 

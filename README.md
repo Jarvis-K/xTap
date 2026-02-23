@@ -81,10 +81,11 @@ xTap is a Chrome extension that silently intercepts the GraphQL API responses X/
 3. The service worker parses, normalizes, deduplicates, and batches tweets
 4. Batches are sent to disk via one of two transports:
    - **HTTP daemon**: a standalone `xtap_daemon.py` process on `127.0.0.1:17381`, managed by launchd (macOS), systemd (Linux), or Scheduled Task (Windows). On macOS, it runs outside Chrome's TCC sandbox and can write to protected paths like `~/Documents` and iCloud Drive
-   - **Native messaging**: `xtap_host.py` over Chrome's stdio protocol — used at startup to retrieve the daemon's auth token (`GET_TOKEN`), and as a data transport fallback if HTTP is unavailable
+   - **Native messaging**: `xtap_host.py` over Chrome's stdio protocol — used as a bootstrap fallback (`GET_TOKEN`) and on-demand fallback writes when HTTP is temporarily unavailable
 
 The native host reads Chrome's length-prefixed stdio frames with exact-length reads so fragmented pipe delivery does not terminate the host prematurely.
-`GET_TOKEN` bootstrap is handled before output-directory initialization, so temporary output-path permission issues do not block HTTP token retrieval.
+HTTP token bootstrap now prefers daemon `GET /bootstrap-token`; native `GET_TOKEN` is a fallback path. Bootstrap is handled before output-directory initialization, so temporary output-path permission issues do not block HTTP token retrieval.
+Transport startup is HTTP-first: if cached token probe fails, the service worker enters degraded mode and retries token bootstrap in the background (exponential backoff + jitter) instead of keeping a long-lived native port.
 
 ## Is This Safe to Use?
 
@@ -200,6 +201,8 @@ export XTAP_OUTPUT_DIR="$HOME/Documents/xtap-data"
 | `XTAP_OUTPUT_DIR` env var | `~/Downloads/xtap` | Fallback when no popup setting is configured |
 | Debug logging toggle | Off | Writes service worker logs to `debug-YYYY-MM-DD.log` in the output directory |
 | Discovery mode toggle | Off | Logs endpoint response shapes and can dump full JSON responses to disk |
+| Allow native fallback toggle | On | If disabled, extension will not write via native host when HTTP is down |
+| Retry HTTP now button | Manual action | Immediately triggers token bootstrap/probe to recover HTTP transport |
 
 > **macOS note:** On macOS, the HTTP daemon (installed via `install.sh`) runs outside Chrome's TCC sandbox and can write to protected paths like `~/Documents` and iCloud Drive after a one-time macOS permission prompt. If the daemon is unavailable and the extension falls back to native messaging, protected paths will fail with a permission error — `~/Downloads` is the safe default in that case.
 
